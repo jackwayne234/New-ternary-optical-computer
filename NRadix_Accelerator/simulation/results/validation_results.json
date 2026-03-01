@@ -1,0 +1,25 @@
+{
+  "run_date": "2026-03-01",
+  "platform": "RunPod NVIDIA L4 24GB",
+  "method": "BPM (split-step Fourier)",
+  "grid": "250 x 375 (80nm spacing)",
+  "optimization": {
+    "iterations": 300,
+    "learning_rate": 0.01,
+    "best_objective": 41.3404,
+    "time_seconds": 1077.7,
+    "time_per_iter": 3.6
+  },
+  "all_pass": true,
+  "results": [
+    {"trit_a": 1, "trit_b": 1, "product": 1, "correct_port": 0, "detected_port": 0, "extinction_ratio_db": 12.2, "power_fraction_pct": 81.7, "passed": true},
+    {"trit_a": 1, "trit_b": 2, "product": 2, "correct_port": 1, "detected_port": 1, "extinction_ratio_db": 12.7, "power_fraction_pct": 83.3, "passed": true},
+    {"trit_a": 1, "trit_b": 3, "product": 3, "correct_port": 3, "detected_port": 3, "extinction_ratio_db": 14.8, "power_fraction_pct": 90.9, "passed": true},
+    {"trit_a": 2, "trit_b": 1, "product": 2, "correct_port": 1, "detected_port": 1, "extinction_ratio_db": 12.7, "power_fraction_pct": 83.3, "passed": true},
+    {"trit_a": 2, "trit_b": 2, "product": 4, "correct_port": 2, "detected_port": 2, "extinction_ratio_db": 11.5, "power_fraction_pct": 80.5, "passed": true},
+    {"trit_a": 2, "trit_b": 3, "product": 6, "correct_port": 4, "detected_port": 4, "extinction_ratio_db": 13.3, "power_fraction_pct": 88.9, "passed": true},
+    {"trit_a": 3, "trit_b": 1, "product": 3, "correct_port": 3, "detected_port": 3, "extinction_ratio_db": 14.8, "power_fraction_pct": 90.9, "passed": true},
+    {"trit_a": 3, "trit_b": 2, "product": 6, "correct_port": 4, "detected_port": 4, "extinction_ratio_db": 13.3, "power_fraction_pct": 88.9, "passed": true},
+    {"trit_a": 3, "trit_b": 3, "product": 9, "correct_port": 5, "detected_port": 5, "extinction_ratio_db": 14.0, "power_fraction_pct": 88.1, "passed": true}
+  ]
+}
