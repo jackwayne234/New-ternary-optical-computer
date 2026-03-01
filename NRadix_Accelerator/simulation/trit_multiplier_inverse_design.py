@@ -14,8 +14,8 @@ Objective:
   Maximize power at the correct output port for each of the 9 input combos.
   Minimize crosstalk (power at wrong ports).
 
-Run on AWS g5.xlarge with:
-  source /home/ubuntu/fdtdx-env/bin/activate
+Run on GCP g2-standard-4 (NVIDIA L4) with:
+  source /home/fdtdx-env/bin/activate
   python trit_multiplier_inverse_design.py
 
 Requires: fdtdx, jax[cuda12], numpy, matplotlib
@@ -83,9 +83,9 @@ def freq_to_wavelength_nm(freq_thz: float) -> float:
 class SimConfig:
     """Configuration for the inverse design simulation."""
     # Spatial resolution
-    dx: float = 20e-9        # 20 nm grid spacing
-    dy: float = 20e-9
-    dz: float = 20e-9
+    dx: float = 40e-9        # 40 nm grid spacing (fits in 24GB VRAM)
+    dy: float = 40e-9
+    dz: float = 40e-9
 
     # Simulation domain (meters)
     domain_x: float = 20e-6  # 20 um
@@ -118,7 +118,7 @@ class SimConfig:
     pml_thickness: int = 10  # grid cells
 
     # Time stepping
-    num_time_steps: int = 5000
+    num_time_steps: int = 2000
     courant_factor: float = 0.5
 
     # Output
@@ -391,6 +391,7 @@ def run_forward(
         raise ValueError(f"Sources not found for freqs {source_a_freq_thz}, {source_b_freq_thz}")
 
     # Simplified FDTD loop using jax.lax.fori_loop for GPU efficiency
+    @jax.checkpoint
     def fdtd_step(i, state):
         Ez, Hx, Hy = state
         t = i * dt
@@ -750,7 +751,7 @@ def main():
         print("GPU detected - running on GPU")
     else:
         print("WARNING: No GPU detected. Simulation will be slow on CPU.")
-        print("For production runs, use AWS g5.xlarge with CUDA 12.")
+        print("For production runs, use GCP g2-standard-4 (NVIDIA L4) with CUDA 12.")
 
     # Run optimization
     t0 = time.time()
