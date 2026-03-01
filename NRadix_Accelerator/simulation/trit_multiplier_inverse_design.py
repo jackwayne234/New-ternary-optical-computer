@@ -367,8 +367,15 @@ def run_forward(
     # SFG product frequency
     product_freq_thz = source_a_freq_thz + source_b_freq_thz
 
-    # --- Simplified 2D FDTD (Ez, Hx, Hy - TM polarization) ---
-    dt = config.courant_factor * config.dx / C_LIGHT
+    # --- 2D FDTD (Ez, Hx, Hy - TM polarization) ---
+    # Physical constants
+    mu0 = 4.0 * jnp.pi * 1e-7       # permeability of free space
+    eps0 = 8.854187817e-12            # permittivity of free space
+    dx = config.dx
+    dy = config.dy
+
+    # 2D Courant stability: dt <= dx / (c * sqrt(2))
+    dt = config.courant_factor * dx / (C_LIGHT * jnp.sqrt(2.0))
     num_steps = config.num_time_steps
 
     Ez = jnp.zeros((nx, ny))
@@ -376,9 +383,11 @@ def run_forward(
     Hy = jnp.zeros((nx, ny))
 
     # Source parameters
-    omega_product = 2 * jnp.pi * product_freq_thz * 1e12
+    omega_product = 2.0 * jnp.pi * product_freq_thz * 1e12
 
-    # Find source injection points
+    # Source injection point: midpoint between the two input waveguides,
+    # just before the design region. Both inputs carry the same product
+    # frequency (SFG output) for AWG routing optimization.
     src_a = None
     src_b = None
     for s in sim["sources"]:
@@ -390,43 +399,60 @@ def run_forward(
     if src_a is None or src_b is None:
         raise ValueError(f"Sources not found for freqs {source_a_freq_thz}, {source_b_freq_thz}")
 
-    # Simplified FDTD loop using scan + remat for memory-efficient autodiff
-    # Pre-compute PML damping mask (avoids Python loop inside traced function)
+    # Pre-compute FDTD update coefficients
+    Ce = dt / (eps0 * eps)       # E-field update coefficient (shape: nx, ny)
+    Ch = dt / mu0                 # H-field update coefficient (scalar)
+
+    # PML conductivity profile (polynomial grading)
     pml = config.pml_thickness
-    damp_mask = jnp.ones((nx, ny))
-    for edge in range(pml):
-        d = 0.5 * (edge / pml)
-        damp_mask = damp_mask.at[edge, :].set(d)
-        damp_mask = damp_mask.at[-(edge+1), :].set(d)
-        damp_mask = damp_mask.at[:, edge].set(d)
-        damp_mask = damp_mask.at[:, -(edge+1)].set(d)
+    sigma_max = 0.8 * (pml + 1) / (dx * jnp.sqrt(mu0 / eps0))
+    # Build conductivity arrays for x and y boundaries
+    sigma_x = jnp.zeros(nx)
+    sigma_y = jnp.zeros(ny)
+    for i in range(pml):
+        sigma_val = sigma_max * ((pml - i) / pml) ** 3
+        sigma_x = sigma_x.at[i].set(sigma_val)
+        sigma_x = sigma_x.at[-(i+1)].set(sigma_val)
+        sigma_y = sigma_y.at[i].set(sigma_val)
+        sigma_y = sigma_y.at[-(i+1)].set(sigma_val)
+    # Combined damping factor per time step
+    damp_x = jnp.exp(-sigma_x * dt / eps0)[:, None]  # (nx, 1)
+    damp_y = jnp.exp(-sigma_y * dt / eps0)[None, :]   # (1, ny)
+    damp_mask = damp_x * damp_y                         # (nx, ny)
+
+    # Source amplitude: scale to inject meaningful field energy
+    # Use impedance-matched amplitude for a 2D point source
+    source_scale = dx * 1e6  # scale factor for point source
 
     @jax.remat
     def fdtd_step(state, i):
         Ez, Hx, Hy = state
         t = i * dt
 
-        # Update H fields
-        Hx = Hx - (dt / (4 * jnp.pi * 1e-7)) * (jnp.roll(Ez, -1, axis=1) - Ez)
-        Hy = Hy + (dt / (4 * jnp.pi * 1e-7)) * (jnp.roll(Ez, -1, axis=0) - Ez)
+        # H-field update (standard Yee staggered grid)
+        # Hx -= (dt/mu0) * dEz/dy
+        Hx = Hx - (Ch / dy) * (jnp.roll(Ez, -1, axis=1) - Ez)
+        # Hy += (dt/mu0) * dEz/dx
+        Hy = Hy + (Ch / dx) * (jnp.roll(Ez, -1, axis=0) - Ez)
 
-        # Update E field
-        curl_H = (jnp.roll(Hy, 1, axis=0) - Hy) - (jnp.roll(Hx, 1, axis=1) - Hx)
-        Ez = Ez + (dt / (8.854e-12 * eps)) * curl_H
+        # E-field update
+        # Ez += (dt/(eps0*eps_r)) * (dHy/dx - dHx/dy)
+        dHy_dx = (Hy - jnp.roll(Hy, 1, axis=0)) / dx
+        dHx_dy = (Hx - jnp.roll(Hx, 1, axis=1)) / dy
+        Ez = Ez + Ce * (dHy_dx - dHx_dy)
 
-        # Inject sources (CW at product frequency to simulate SFG output)
-        # In real simulation, we'd inject at input freqs and model chi(2) nonlinearity.
-        # For the AWG routing optimization, we directly inject the product frequency.
-        source_amp = jnp.sin(omega_product * t) * jnp.exp(-((t - 50*dt)/(20*dt))**2)
-        Ez = Ez.at[src_a["grid_x"], src_a["grid_y"]].add(source_amp * 0.5)
-        Ez = Ez.at[src_b["grid_x"], src_b["grid_y"]].add(source_amp * 0.5)
+        # CW source with smooth ramp-up (no early cutoff)
+        ramp = jnp.minimum(i / 100.0, 1.0)
+        source_amp = source_scale * ramp * jnp.sin(omega_product * t)
+        Ez = Ez.at[src_a["grid_x"], src_a["grid_y"]].add(source_amp)
+        Ez = Ez.at[src_b["grid_x"], src_b["grid_y"]].add(source_amp)
 
-        # Apply pre-computed PML damping
+        # PML absorption
         Ez = Ez * damp_mask
 
         return (Ez, Hx, Hy), None
 
-    # Run FDTD with scan (remat recomputes forward pass during backprop instead of storing)
+    # Run FDTD with scan (remat recomputes during backprop to save memory)
     (Ez, Hx, Hy), _ = jax.lax.scan(fdtd_step, (Ez, Hx, Hy), jnp.arange(num_steps))
 
     # Measure power at each output monitor
