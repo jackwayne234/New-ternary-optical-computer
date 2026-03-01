@@ -1,5 +1,5 @@
 """
-Optical Systolic Array — Math-First Redesign
+Optical Systolic Array — 1D (Original Prototype)
 
 Architecture: multiply-only optical + electronic accumulate.
 
@@ -13,8 +13,9 @@ The optical side does the expensive part (parallel multiplication).
 The electronic side does the cheap part (sequential accumulation).
 
 This module defines the PE and a 1D systolic array for matrix-vector multiply.
-For the initial prototype, we focus on a single PE (1 trit x 1 trit)
-but structure the code to scale to arrays.
+
+NOTE: For the full 9x9 2D systolic array with weight-stationary dataflow,
+matrix-vector, and matrix-matrix multiply, see systolic_array_2d.py.
 """
 
 from __future__ import annotations
@@ -88,8 +89,8 @@ class ProcessingElement:
 
 
 @dataclass
-class OpticalSystolicArray:
-    """1D Optical Systolic Array for trit-vector dot products.
+class OpticalSystolicArray1D:
+    """1D Optical Systolic Array for trit-vector dot products (original prototype).
 
     Contains N processing elements, each computing one output element.
     For matrix-vector multiply C = A * b:
@@ -97,8 +98,7 @@ class OpticalSystolicArray:
       - A values are stationary in each PE
       - b values flow through the array
 
-    For the initial prototype (single trit x trit), this is just 1 PE.
-    The structure is here to scale up.
+    For the full 9x9 2D version, see SystolicArray2D in systolic_array_2d.py.
     """
     num_pes: int = 1
     pes: list[ProcessingElement] = field(default_factory=list)
@@ -159,7 +159,7 @@ def self_test():
 
     # Test 1: Single trit x trit (1 PE)
     print("\nTest 1: Single trit x trit multiplication")
-    array = OpticalSystolicArray(num_pes=1)
+    array = OpticalSystolicArray1D(num_pes=1)
     for a in TRIT_VALUES:
         for b in TRIT_VALUES:
             result = array.dot_product([a], [b])
@@ -170,7 +170,7 @@ def self_test():
 
     # Test 2: Dot product of trit vectors
     print("\nTest 2: Dot product [2, 3, 1] . [1, 2, 3]")
-    array = OpticalSystolicArray(num_pes=1)
+    array = OpticalSystolicArray1D(num_pes=1)
     vec_a = [2, 3, 1]
     vec_b = [1, 2, 3]
     result = array.dot_product(vec_a, vec_b)
@@ -190,7 +190,7 @@ def self_test():
         3*2 + 1*3,  # = 9
         2*2 + 3*3,  # = 13
     ]
-    array = OpticalSystolicArray(num_pes=3)
+    array = OpticalSystolicArray1D(num_pes=3)
     result = array.matrix_vector_multiply(matrix, vector)
     print(f"  Matrix: {matrix}")
     print(f"  Vector: {vector}")
@@ -200,7 +200,7 @@ def self_test():
 
     # Test 4: Accumulator history
     print("\nTest 4: Accumulator history for dot product [2,3,1].[1,2,3]")
-    array = OpticalSystolicArray(num_pes=1)
+    array = OpticalSystolicArray1D(num_pes=1)
     pe = array.pes[0]
     for a, b in zip([2, 3, 1], [1, 2, 3]):
         pe.multiply_and_accumulate(a, b)
