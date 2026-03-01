@@ -83,14 +83,14 @@ def freq_to_wavelength_nm(freq_thz: float) -> float:
 class SimConfig:
     """Configuration for the inverse design simulation."""
     # Spatial resolution
-    dx: float = 40e-9        # 40 nm grid spacing (fits in 24GB VRAM)
-    dy: float = 40e-9
-    dz: float = 40e-9
+    dx: float = 80e-9        # 80 nm grid spacing (fits L4 24GB VRAM)
+    dy: float = 80e-9
+    dz: float = 0.22e-6      # single z-cell (true 2D simulation)
 
     # Simulation domain (meters)
     domain_x: float = 20e-6  # 20 um
     domain_y: float = 30e-6  # 30 um (wider for 6 output ports)
-    domain_z: float = 0.22e-6  # 220 nm slab (2D-ish for speed)
+    domain_z: float = 0.22e-6  # 220 nm slab (2D)
 
     # Design region (the part the optimizer can modify)
     design_x: float = 15e-6  # 15 um design area
@@ -118,7 +118,7 @@ class SimConfig:
     pml_thickness: int = 10  # grid cells
 
     # Time stepping
-    num_time_steps: int = 2000
+    num_time_steps: int = 1000
     courant_factor: float = 0.5
 
     # Output
@@ -390,14 +390,24 @@ def run_forward(
     if src_a is None or src_b is None:
         raise ValueError(f"Sources not found for freqs {source_a_freq_thz}, {source_b_freq_thz}")
 
-    # Simplified FDTD loop using jax.lax.fori_loop for GPU efficiency
-    @jax.checkpoint
-    def fdtd_step(i, state):
+    # Simplified FDTD loop using scan + remat for memory-efficient autodiff
+    # Pre-compute PML damping mask (avoids Python loop inside traced function)
+    pml = config.pml_thickness
+    damp_mask = jnp.ones((nx, ny))
+    for edge in range(pml):
+        d = 0.5 * (edge / pml)
+        damp_mask = damp_mask.at[edge, :].set(d)
+        damp_mask = damp_mask.at[-(edge+1), :].set(d)
+        damp_mask = damp_mask.at[:, edge].set(d)
+        damp_mask = damp_mask.at[:, -(edge+1)].set(d)
+
+    @jax.remat
+    def fdtd_step(state, i):
         Ez, Hx, Hy = state
         t = i * dt
 
         # Update H fields
-        Hx = Hx - (dt / (4 * jnp.pi * 1e-7)) * jnp.roll(Ez, -1, axis=1) - Ez
+        Hx = Hx - (dt / (4 * jnp.pi * 1e-7)) * (jnp.roll(Ez, -1, axis=1) - Ez)
         Hy = Hy + (dt / (4 * jnp.pi * 1e-7)) * (jnp.roll(Ez, -1, axis=0) - Ez)
 
         # Update E field
@@ -411,19 +421,13 @@ def run_forward(
         Ez = Ez.at[src_a["grid_x"], src_a["grid_y"]].add(source_amp * 0.5)
         Ez = Ez.at[src_b["grid_x"], src_b["grid_y"]].add(source_amp * 0.5)
 
-        # Simple absorbing boundary (damping at edges)
-        pml = config.pml_thickness
-        for edge in range(pml):
-            damp = 0.5 * (edge / pml)
-            Ez = Ez.at[edge, :].mul(damp)
-            Ez = Ez.at[-(edge+1), :].mul(damp)
-            Ez = Ez.at[:, edge].mul(damp)
-            Ez = Ez.at[:, -(edge+1)].mul(damp)
+        # Apply pre-computed PML damping
+        Ez = Ez * damp_mask
 
-        return (Ez, Hx, Hy)
+        return (Ez, Hx, Hy), None
 
-    # Run FDTD
-    Ez, Hx, Hy = jax.lax.fori_loop(0, num_steps, fdtd_step, (Ez, Hx, Hy))
+    # Run FDTD with scan (remat recomputes forward pass during backprop instead of storing)
+    (Ez, Hx, Hy), _ = jax.lax.scan(fdtd_step, (Ez, Hx, Hy), jnp.arange(num_steps))
 
     # Measure power at each output monitor
     port_powers = {}
