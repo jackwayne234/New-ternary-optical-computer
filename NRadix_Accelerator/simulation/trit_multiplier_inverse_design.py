@@ -432,7 +432,7 @@ def run_forward(
         mx, my = mon["grid_x"], mon["grid_y"]
         window = 3  # +/- 3 cells
         power = jnp.sum(Ez[mx-window:mx+window, my-window:my+window] ** 2)
-        port_powers[mon["product"]] = float(power)
+        port_powers[mon["product"]] = power  # keep as jax array for autodiff
 
     return port_powers
 
