@@ -1,24 +1,24 @@
 """
-FDTDX Inverse Design: Single Trit x Trit Optical Multiplier
+Inverse Design: Single Trit x Trit Optical Multiplier — AWG Wavelength Router
 
-This script defines and runs the inverse design optimization for the
-SFG + AWG structure that performs single trit multiplication.
+Optimizes the refractive index distribution of a photonic structure to route
+6 different SFG product wavelengths to 6 output ports.
+
+Method: Beam Propagation Method (BPM) with split-step Fourier.
+  - Propagates fields along x through the design region
+  - One propagation per product frequency (6 total, not 9 — symmetric combos share freqs)
+  - ~250 propagation steps (one per x-slice), each fully differentiable
+  - Much better gradient flow than FDTD for this routing optimization
 
 Architecture:
-  - 2 input waveguides (each carrying one of 3 wavelengths)
-  - SFG nonlinear region (design region - optimizer shapes this)
-  - AWG wavelength router (design region - optimizer shapes this)
-  - 6 output waveguides (one per product: 1, 2, 3, 4, 6, 9)
+  - Input: SFG product beam enters from left (one frequency at a time)
+  - Design region: optimizer shapes refractive index to act as wavelength router
+  - Output: 6 ports on the right, one per product value {1, 2, 3, 4, 6, 9}
 
-Objective:
-  Maximize power at the correct output port for each of the 9 input combos.
-  Minimize crosstalk (power at wrong ports).
-
-Run on GCP g2-standard-4 (NVIDIA L4) with:
-  source /home/fdtdx-env/bin/activate
+Run on RunPod (NVIDIA L4) with:
   python trit_multiplier_inverse_design.py
 
-Requires: fdtdx, jax[cuda12], numpy, matplotlib
+Requires: jax[cuda12], numpy, matplotlib
 """
 
 from __future__ import annotations
@@ -31,8 +31,6 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import numpy as np
-
-import fdtdx
 
 # ============================================================================
 # Wavelength / Frequency Constants (must match trit_multiplication.py)
@@ -64,14 +62,15 @@ INPUT_COMBOS = [
     (3, 1, 3), (3, 2, 6), (3, 3, 9),
 ]  # (trit_a, trit_b, product)
 
+# Unique products (avoid duplicate simulations for symmetric combos)
+UNIQUE_PRODUCTS = [1, 2, 3, 4, 6, 9]
+
 
 def freq_to_wavelength_m(freq_thz: float) -> float:
-    """Convert THz to meters."""
     return C_LIGHT / (freq_thz * 1e12)
 
 
 def freq_to_wavelength_nm(freq_thz: float) -> float:
-    """Convert THz to nanometers."""
     return freq_to_wavelength_m(freq_thz) * 1e9
 
 
@@ -81,45 +80,30 @@ def freq_to_wavelength_nm(freq_thz: float) -> float:
 
 @dataclass
 class SimConfig:
-    """Configuration for the inverse design simulation."""
     # Spatial resolution
-    dx: float = 80e-9        # 80 nm grid spacing (fits L4 24GB VRAM)
+    dx: float = 80e-9        # 80 nm grid spacing
     dy: float = 80e-9
-    dz: float = 0.22e-6      # single z-cell (true 2D simulation)
 
     # Simulation domain (meters)
-    domain_x: float = 20e-6  # 20 um
-    domain_y: float = 30e-6  # 30 um (wider for 6 output ports)
-    domain_z: float = 0.22e-6  # 220 nm slab (2D)
+    domain_x: float = 20e-6  # 20 um propagation length
+    domain_y: float = 30e-6  # 30 um width (6 output ports)
 
     # Design region (the part the optimizer can modify)
     design_x: float = 15e-6  # 15 um design area
     design_y: float = 25e-6  # 25 um design area
-    design_x_offset: float = 2.5e-6  # centered in domain
+    design_x_offset: float = 2.5e-6
     design_y_offset: float = 2.5e-6
 
     # Waveguide parameters
     wg_width: float = 0.5e-6     # 500 nm waveguide width
-    wg_length: float = 2.0e-6    # 2 um input/output waveguide length
 
     # Material properties
-    n_core: float = 2.4     # Silicon nitride (SiN) - good for SFG
+    n_core: float = 2.2     # SiN core
     n_clad: float = 1.44    # SiO2 cladding
-    chi2: float = 1.0e-12   # Second-order nonlinear susceptibility (m/V)
-                             # SiN chi(2) is small but nonzero; this is a
-                             # design parameter the optimizer will work with
 
     # Optimization
-    num_iterations: int = 500
-    learning_rate: float = 0.1
-    min_feature_size: float = 80e-9  # 80 nm minimum feature (fab constraint)
-
-    # PML (perfectly matched layer) boundary
-    pml_thickness: int = 10  # grid cells
-
-    # Time stepping
-    num_time_steps: int = 500
-    courant_factor: float = 0.5
+    num_iterations: int = 300
+    learning_rate: float = 0.01
 
     # Output
     output_dir: str = "results"
@@ -133,42 +117,19 @@ CONFIG = SimConfig()
 # ============================================================================
 
 def build_input_waveguides(config: SimConfig) -> list[dict]:
-    """Define 2 input waveguide positions.
-
-    Input A enters from the left side, top half.
-    Input B enters from the left side, bottom half.
-    """
     y_center = config.domain_y / 2
-    spacing = config.domain_y / 4  # quarter-domain spacing
-
-    waveguides = [
-        {
-            "label": "input_A",
-            "x_start": 0,
-            "x_end": config.design_x_offset,
-            "y_center": y_center + spacing / 2,
-            "width": config.wg_width,
-        },
-        {
-            "label": "input_B",
-            "x_start": 0,
-            "x_end": config.design_x_offset,
-            "y_center": y_center - spacing / 2,
-            "width": config.wg_width,
-        },
+    spacing = config.domain_y / 4
+    return [
+        {"label": "input_A", "x_end": config.design_x_offset,
+         "y_center": y_center + spacing / 2, "width": config.wg_width},
+        {"label": "input_B", "x_end": config.design_x_offset,
+         "y_center": y_center - spacing / 2, "width": config.wg_width},
     ]
-    return waveguides
 
 
 def build_output_waveguides(config: SimConfig) -> list[dict]:
-    """Define 6 output waveguide positions, one per product.
-
-    Output ports are evenly spaced along the right edge.
-    Port order matches ascending frequency (product order: 1,2,4,3,6,9).
-    """
     x_start = config.design_x_offset + config.design_x
-    x_end = config.domain_x
-    y_margin = 3e-6  # margin from top/bottom
+    y_margin = 3e-6
     usable_y = config.domain_y - 2 * y_margin
     num_ports = 6
 
@@ -177,40 +138,24 @@ def build_output_waveguides(config: SimConfig) -> list[dict]:
         y_center = y_margin + usable_y * (i + 0.5) / num_ports
         waveguides.append({
             "label": f"output_port{i}_product{product}",
-            "product": product,
-            "port_index": i,
-            "x_start": x_start,
-            "x_end": x_end,
-            "y_center": y_center,
-            "width": config.wg_width,
+            "product": product, "port_index": i,
+            "x_start": x_start, "x_end": config.domain_x,
+            "y_center": y_center, "width": config.wg_width,
         })
     return waveguides
 
 
 # ============================================================================
-# FDTDX Simulation Setup
+# Simulation Setup
 # ============================================================================
 
 def create_simulation(config: SimConfig):
-    """Create the FDTDX simulation with design region, sources, and monitors.
-
-    Returns the simulation object and design parameters.
-    """
-    # Grid dimensions
     nx = int(config.domain_x / config.dx)
     ny = int(config.domain_y / config.dy)
-    nz = max(int(config.domain_z / config.dz), 1)
 
-    print(f"Grid: {nx} x {ny} x {nz} = {nx*ny*nz:,} cells")
-    print(f"Domain: {config.domain_x*1e6:.1f} x {config.domain_y*1e6:.1f} x {config.domain_z*1e6:.2f} um")
+    print(f"Grid: {nx} x {ny} = {nx*ny:,} cells")
+    print(f"Domain: {config.domain_x*1e6:.1f} x {config.domain_y*1e6:.1f} um")
 
-    # --- Initialize permittivity grid ---
-    # Start with cladding everywhere
-    eps_background = config.n_clad ** 2
-    eps_grid = jnp.full((nx, ny, nz), eps_background)
-
-    # --- Design region (binary: core or clad) ---
-    # The optimizer controls a 2D density map (0=clad, 1=core)
     design_nx = int(config.design_x / config.dx)
     design_ny = int(config.design_y / config.dy)
     design_x0 = int(config.design_x_offset / config.dx)
@@ -218,49 +163,25 @@ def create_simulation(config: SimConfig):
 
     print(f"Design region: {design_nx} x {design_ny} cells "
           f"({config.design_x*1e6:.1f} x {config.design_y*1e6:.1f} um)")
+    print(f"BPM propagation steps: {nx}")
 
-    # Initial design: random density
     key = jax.random.PRNGKey(42)
-    design_params = jax.random.uniform(key, (design_nx, design_ny), minval=0.3, maxval=0.7)
+    design_params = jax.random.uniform(key, (design_nx, design_ny), minval=0.4, maxval=0.6)
 
-    # --- Source definitions ---
     input_wgs = build_input_waveguides(config)
     output_wgs = build_output_waveguides(config)
 
-    # --- Build source/monitor metadata ---
-    sources = []
-    for wg in input_wgs:
-        for trit_val, freq_thz in INPUT_FREQUENCIES_THZ.items():
-            wl_m = freq_to_wavelength_m(freq_thz)
-            source_x = int(config.design_x_offset / config.dx) - 5  # just before design region
-            source_y = int(wg["y_center"] / config.dy)
-            sources.append({
-                "label": f"{wg['label']}_trit{trit_val}",
-                "waveguide": wg["label"],
-                "trit_value": trit_val,
-                "freq_thz": freq_thz,
-                "wavelength_m": wl_m,
-                "wavelength_nm": wl_m * 1e9,
-                "grid_x": source_x,
-                "grid_y": source_y,
-            })
-
     monitors = []
     for wg in output_wgs:
-        monitor_x = int(wg["x_start"] / config.dx) + 5  # just after design region
         monitor_y = int(wg["y_center"] / config.dy)
         monitors.append({
-            "label": wg["label"],
-            "product": wg["product"],
-            "port_index": wg["port_index"],
-            "grid_x": monitor_x,
-            "grid_y": monitor_y,
+            "label": wg["label"], "product": wg["product"],
+            "port_index": wg["port_index"], "grid_y": monitor_y,
         })
 
     return {
         "config": config,
-        "grid_shape": (nx, ny, nz),
-        "eps_background": eps_background,
+        "grid_shape": (nx, ny),
         "design_params": design_params,
         "design_region": {
             "x0": design_x0, "y0": design_y0,
@@ -268,200 +189,117 @@ def create_simulation(config: SimConfig):
         },
         "input_waveguides": input_wgs,
         "output_waveguides": output_wgs,
-        "sources": sources,
         "monitors": monitors,
     }
 
 
 # ============================================================================
-# Physics: Permittivity from Design Parameters
+# Physics: Density to Refractive Index
 # ============================================================================
 
-def density_to_permittivity(
-    density: jnp.ndarray,
-    eps_core: float,
-    eps_clad: float,
-    beta: float = 8.0,
-) -> jnp.ndarray:
-    """Convert continuous density [0,1] to permittivity using sigmoid projection.
-
-    Beta controls sharpness: higher beta -> more binary (closer to fab-ready).
-    Gradually increase beta during optimization for better convergence.
-    """
-    # Sigmoid projection for binarization
+def density_to_index(density, n_core, n_clad, beta=8.0):
     projected = jax.nn.sigmoid(beta * (density - 0.5))
-    return eps_clad + (eps_core - eps_clad) * projected
-
-
-def apply_min_feature_size(
-    density: jnp.ndarray,
-    min_feature_pixels: int,
-) -> jnp.ndarray:
-    """Apply minimum feature size constraint via circular convolution filter.
-
-    This is a soft constraint — helps the optimizer avoid sub-wavelength features
-    that can't be fabricated.
-    """
-    if min_feature_pixels <= 1:
-        return density
-
-    # Create circular kernel
-    r = min_feature_pixels
-    y, x = jnp.mgrid[-r:r+1, -r:r+1]
-    kernel = (x**2 + y**2 <= r**2).astype(jnp.float32)
-    kernel = kernel / kernel.sum()
-
-    # Apply as 2D convolution (smoothing)
-    density_4d = density[None, None, :, :]
-    kernel_4d = kernel[None, None, :, :]
-    smoothed = jax.lax.conv(density_4d, kernel_4d, window_strides=(1, 1), padding="SAME")
-    return smoothed[0, 0]
+    return n_clad + (n_core - n_clad) * projected
 
 
 # ============================================================================
-# Forward Simulation (simplified FDTD core)
+# BPM Forward Simulation
 # ============================================================================
 
-def run_forward(
-    sim: dict,
-    design_density: jnp.ndarray,
-    source_a_freq_thz: float,
-    source_b_freq_thz: float,
-    beta: float = 8.0,
-) -> dict[int, float]:
-    """Run forward FDTD simulation for one pair of input frequencies.
+def run_forward_bpm(sim, design_density, product_freq_thz, beta=8.0):
+    """Propagate a beam at the given product frequency through the device.
+
+    Uses split-step Fourier BPM:
+      1. Apply phase screen (refractive index at current x-slice)
+      2. Propagate in free space (FFT method)
 
     Returns power at each output port.
-
-    NOTE: This is a simplified 2D FDTD for prototyping the optimization loop.
-    For production accuracy, use fdtdx's built-in 3D simulation with proper
-    PML boundaries and dispersive materials. The structure of this function
-    shows the optimizer what it needs to compute — the actual physics engine
-    call will use fdtdx APIs.
     """
     config = sim["config"]
-    nx, ny, nz = sim["grid_shape"]
+    nx, ny = sim["grid_shape"]
     dr = sim["design_region"]
-    eps_core = config.n_core ** 2
-    eps_clad = config.n_clad ** 2
-
-    # Build permittivity from design
-    eps_design = density_to_permittivity(design_density, eps_core, eps_clad, beta)
-    eps = jnp.full((nx, ny), eps_clad)
-    eps = eps.at[dr["x0"]:dr["x0"]+dr["nx"], dr["y0"]:dr["y0"]+dr["ny"]].set(eps_design)
-
-    # Add input waveguides
-    for wg in sim["input_waveguides"]:
-        wg_y_start = int((wg["y_center"] - wg["width"]/2) / config.dy)
-        wg_y_end = int((wg["y_center"] + wg["width"]/2) / config.dy)
-        wg_x_end = int(wg["x_end"] / config.dx)
-        eps = eps.at[:wg_x_end, wg_y_start:wg_y_end].set(eps_core)
-
-    # Add output waveguides
-    for wg in sim["output_waveguides"]:
-        wg_y_start = int((wg["y_center"] - wg["width"]/2) / config.dy)
-        wg_y_end = int((wg["y_center"] + wg["width"]/2) / config.dy)
-        wg_x_start = int(wg["x_start"] / config.dx)
-        eps = eps.at[wg_x_start:, wg_y_start:wg_y_end].set(eps_core)
-
-    # SFG product frequency
-    product_freq_thz = source_a_freq_thz + source_b_freq_thz
-
-    # --- 2D FDTD (Ez, Hx, Hy - TM polarization) ---
-    # Physical constants
-    mu0 = 4.0 * jnp.pi * 1e-7       # permeability of free space
-    eps0 = 8.854187817e-12            # permittivity of free space
     dx = config.dx
     dy = config.dy
 
-    # 2D Courant stability: dt <= dx / (c * sqrt(2))
-    dt = config.courant_factor * dx / (C_LIGHT * jnp.sqrt(2.0))
-    num_steps = config.num_time_steps
+    # Build refractive index profile from design
+    n_design = density_to_index(design_density, config.n_core, config.n_clad, beta)
+    n_profile = jnp.full((nx, ny), config.n_clad)
+    n_profile = n_profile.at[dr["x0"]:dr["x0"]+dr["nx"],
+                             dr["y0"]:dr["y0"]+dr["ny"]].set(n_design)
 
-    Ez = jnp.zeros((nx, ny))
-    Hx = jnp.zeros((nx, ny))
-    Hy = jnp.zeros((nx, ny))
+    # Add input waveguides to index profile
+    for wg in sim["input_waveguides"]:
+        wg_y_start = int((wg["y_center"] - wg["width"]/2) / dy)
+        wg_y_end = int((wg["y_center"] + wg["width"]/2) / dy)
+        wg_x_end = int(wg["x_end"] / dx)
+        n_profile = n_profile.at[:wg_x_end, wg_y_start:wg_y_end].set(config.n_core)
 
-    # Source parameters
-    omega_product = 2.0 * jnp.pi * product_freq_thz * 1e12
+    # Add output waveguides
+    for wg in sim["output_waveguides"]:
+        wg_y_start = int((wg["y_center"] - wg["width"]/2) / dy)
+        wg_y_end = int((wg["y_center"] + wg["width"]/2) / dy)
+        wg_x_start = int(wg["x_start"] / dx)
+        n_profile = n_profile.at[wg_x_start:, wg_y_start:wg_y_end].set(config.n_core)
 
-    # Source injection point: midpoint between the two input waveguides,
-    # just before the design region. Both inputs carry the same product
-    # frequency (SFG output) for AWG routing optimization.
-    src_a = None
-    src_b = None
-    for s in sim["sources"]:
-        if s["waveguide"] == "input_A" and abs(s["freq_thz"] - source_a_freq_thz) < 0.1:
-            src_a = s
-        if s["waveguide"] == "input_B" and abs(s["freq_thz"] - source_b_freq_thz) < 0.1:
-            src_b = s
+    # BPM parameters
+    wavelength = C_LIGHT / (product_freq_thz * 1e12)
+    k0 = 2.0 * jnp.pi / wavelength
+    n_ref = (config.n_core + config.n_clad) / 2.0  # reference index
 
-    if src_a is None or src_b is None:
-        raise ValueError(f"Sources not found for freqs {source_a_freq_thz}, {source_b_freq_thz}")
+    # Spatial frequency axis for y-direction
+    ky = 2.0 * jnp.pi * jnp.fft.fftfreq(ny, dy)
 
-    # Pre-compute FDTD update coefficients
-    Ce = dt / (eps0 * eps)       # E-field update coefficient (shape: nx, ny)
-    Ch = dt / mu0                 # H-field update coefficient (scalar)
+    # Free-space propagation kernel (paraxial approximation)
+    # kx = k0*n_ref - ky^2 / (2*k0*n_ref)  (Fresnel approximation)
+    prop_phase = jnp.exp(-1j * ky**2 * dx / (2.0 * k0 * n_ref))
 
-    # PML conductivity profile (polynomial grading)
-    pml = config.pml_thickness
-    sigma_max = 0.8 * (pml + 1) / (dx * jnp.sqrt(mu0 / eps0))
-    # Build conductivity arrays for x and y boundaries
-    sigma_x = jnp.zeros(nx)
-    sigma_y = jnp.zeros(ny)
-    for i in range(pml):
-        sigma_val = sigma_max * ((pml - i) / pml) ** 3
-        sigma_x = sigma_x.at[i].set(sigma_val)
-        sigma_x = sigma_x.at[-(i+1)].set(sigma_val)
-        sigma_y = sigma_y.at[i].set(sigma_val)
-        sigma_y = sigma_y.at[-(i+1)].set(sigma_val)
-    # Combined damping factor per time step
-    damp_x = jnp.exp(-sigma_x * dt / eps0)[:, None]  # (nx, 1)
-    damp_y = jnp.exp(-sigma_y * dt / eps0)[None, :]   # (1, ny)
-    damp_mask = damp_x * damp_y                         # (nx, ny)
+    # Absorbing boundary in y (prevent wraparound from FFT)
+    absorber = jnp.ones(ny)
+    abs_width = 20  # cells
+    for i in range(abs_width):
+        a = 0.5 * (1.0 - jnp.cos(jnp.pi * i / abs_width))  # Hann window
+        absorber = absorber.at[i].set(a)
+        absorber = absorber.at[-(i+1)].set(a)
 
-    # Source amplitude: scale for meaningful field energy in the design region
-    source_scale = 1.0  # normalized amplitude
+    # Initial field: launch from both input waveguides
+    y_coords = jnp.arange(ny) * dy
+    input_a_y = sim["input_waveguides"][0]["y_center"]
+    input_b_y = sim["input_waveguides"][1]["y_center"]
+    beam_w = config.wg_width  # beam width matches waveguide
 
-    @jax.remat
-    def fdtd_step(state, i):
-        Ez, Hx, Hy = state
-        t = i * dt
+    E = (jnp.exp(-((y_coords - input_a_y) / beam_w)**2) +
+         jnp.exp(-((y_coords - input_b_y) / beam_w)**2))
+    E = E.astype(jnp.complex64)
 
-        # H-field update (standard Yee staggered grid)
-        # Hx -= (dt/mu0) * dEz/dy
-        Hx = Hx - (Ch / dy) * (jnp.roll(Ez, -1, axis=1) - Ez)
-        # Hy += (dt/mu0) * dEz/dx
-        Hy = Hy + (Ch / dx) * (jnp.roll(Ez, -1, axis=0) - Ez)
+    # Propagate through all x-slices
+    def bpm_step(E, x_idx):
+        # Phase screen: effect of refractive index at this slice
+        dn = n_profile[x_idx, :] - n_ref
+        phase_screen = jnp.exp(1j * k0 * dn * dx).astype(jnp.complex64)
+        E = E * phase_screen
 
-        # E-field update
-        # Ez += (dt/(eps0*eps_r)) * (dHy/dx - dHx/dy)
-        dHy_dx = (Hy - jnp.roll(Hy, 1, axis=0)) / dx
-        dHx_dy = (Hx - jnp.roll(Hx, 1, axis=1)) / dy
-        Ez = Ez + Ce * (dHy_dx - dHx_dy)
+        # Free-space propagation (split-step Fourier)
+        E_k = jnp.fft.fft(E)
+        E_k = E_k * prop_phase.astype(jnp.complex64)
+        E = jnp.fft.ifft(E_k)
 
-        # CW source with smooth ramp-up (no early cutoff)
-        ramp = jnp.minimum(i / 100.0, 1.0)
-        source_amp = source_scale * ramp * jnp.sin(omega_product * t)
-        Ez = Ez.at[src_a["grid_x"], src_a["grid_y"]].add(source_amp)
-        Ez = Ez.at[src_b["grid_x"], src_b["grid_y"]].add(source_amp)
+        # Absorbing boundary
+        E = E * absorber
 
-        # PML absorption
-        Ez = Ez * damp_mask
+        return E, None
 
-        return (Ez, Hx, Hy), None
+    E_final, _ = jax.lax.scan(bpm_step, E, jnp.arange(nx))
 
-    # Run FDTD with scan (remat recomputes during backprop to save memory)
-    (Ez, Hx, Hy), _ = jax.lax.scan(fdtd_step, (Ez, Hx, Hy), jnp.arange(num_steps))
-
-    # Measure power at each output monitor
+    # Measure power at each output port
     port_powers = {}
     for mon in sim["monitors"]:
-        # Integrate |Ez|^2 over a small window around the monitor point
-        mx, my = mon["grid_x"], mon["grid_y"]
-        window = 3  # +/- 3 cells
-        power = jnp.sum(Ez[mx-window:mx+window, my-window:my+window] ** 2)
-        port_powers[mon["product"]] = power  # keep as jax array for autodiff
+        my = mon["grid_y"]
+        # Integrate |E|^2 over waveguide width at output
+        hw = max(int(config.wg_width / dy / 2), 2)  # half-width in pixels
+        y_lo = jnp.maximum(my - hw, 0)
+        y_hi = jnp.minimum(my + hw, ny)
+        power = jnp.sum(jnp.abs(E_final[y_lo:y_hi])**2)
+        port_powers[mon["product"]] = power
 
     return port_powers
 
@@ -470,36 +308,22 @@ def run_forward(
 # Objective Function
 # ============================================================================
 
-def compute_objective(
-    design_density: jnp.ndarray,
-    sim: dict,
-    beta: float = 8.0,
-) -> float:
-    """Compute the optimization objective for all 9 input combinations.
-
-    Objective = sum over all combos of:
-      log(power at correct port) - log(sum of power at wrong ports + eps)
-
-    Maximizing this means: maximize correct port power, minimize crosstalk.
-    """
+def compute_objective(design_density, sim, beta=8.0):
+    """Maximize power at correct port, minimize crosstalk, for all 6 products."""
     total_objective = 0.0
-    eps = 1e-10  # numerical stability
+    eps = 1e-8
 
-    for trit_a, trit_b, product in INPUT_COMBOS:
-        freq_a = INPUT_FREQUENCIES_THZ[trit_a]
-        freq_b = INPUT_FREQUENCIES_THZ[trit_b]
+    for product in UNIQUE_PRODUCTS:
+        freq = PRODUCT_FREQUENCIES_THZ[product]
+        port_powers = run_forward_bpm(sim, design_density, freq, beta)
 
-        port_powers = run_forward(sim, design_density, freq_a, freq_b, beta)
+        correct_power = port_powers[product]
 
-        correct_port = PRODUCT_TO_PORT[product]
-        correct_power = port_powers.get(product, eps)
-
-        # Crosstalk: sum of power at all wrong ports
+        # Crosstalk: power at all wrong ports
         wrong_power = sum(
             p for prod, p in port_powers.items() if prod != product
         ) + eps
 
-        # Maximize ratio of correct to wrong
         total_objective += jnp.log(correct_power + eps) - jnp.log(wrong_power)
 
     return total_objective
@@ -509,31 +333,22 @@ def compute_objective(
 # Optimization Loop
 # ============================================================================
 
-def optimize(sim: dict, config: SimConfig) -> jnp.ndarray:
-    """Run the inverse design optimization loop.
-
-    Uses JAX's automatic differentiation to compute gradients of the
-    objective with respect to the design parameters, then updates
-    via Adam optimizer.
-    """
+def optimize(sim, config):
     from jax.example_libraries import optimizers
 
     design_density = sim["design_params"]
 
-    # Adam optimizer
     opt_init, opt_update, get_params = optimizers.adam(config.learning_rate)
     opt_state = opt_init(design_density)
 
-    # Gradually increase binarization (start soft for better gradient flow)
-    beta_schedule = jnp.linspace(1.0, 16.0, config.num_iterations)
-
-    # Min feature size in pixels
-    min_feat_px = max(1, int(config.min_feature_size / config.dx))
+    # Beta schedule: start soft, end sharp
+    beta_schedule = jnp.linspace(1.0, 12.0, config.num_iterations)
 
     print(f"\nStarting optimization: {config.num_iterations} iterations")
     print(f"Learning rate: {config.learning_rate}")
-    print(f"Min feature size: {config.min_feature_size*1e9:.0f} nm ({min_feat_px} px)")
-    print("=" * 60)
+    print(f"Method: BPM (split-step Fourier)")
+    print(f"Frequencies: 6 unique products per iteration")
+    print("=" * 70)
 
     best_obj = -jnp.inf
     best_density = design_density
@@ -542,42 +357,41 @@ def optimize(sim: dict, config: SimConfig) -> jnp.ndarray:
     for iteration in range(config.num_iterations):
         beta = float(beta_schedule[iteration])
         params = get_params(opt_state)
-
-        # Clamp to [0, 1]
         params = jnp.clip(params, 0.0, 1.0)
 
-        # Apply minimum feature size
-        params_filtered = apply_min_feature_size(params, min_feat_px)
-
-        # Compute objective and gradient
         obj_val, grad = jax.value_and_grad(
             lambda d: compute_objective(d, sim, beta)
-        )(params_filtered)
+        )(params)
 
-        # Update
-        opt_state = opt_update(iteration, -grad, opt_state)  # negate: we maximize
+        # Negate gradient because we maximize
+        opt_state = opt_update(iteration, -grad, opt_state)
+
+        grad_norm = float(jnp.linalg.norm(grad))
+        obj_float = float(obj_val)
 
         history.append({
             "iteration": iteration,
-            "objective": float(obj_val),
+            "objective": obj_float,
             "beta": beta,
+            "grad_norm": grad_norm,
             "density_mean": float(jnp.mean(params)),
             "density_binarization": float(jnp.mean(jnp.abs(2 * params - 1))),
         })
 
         if obj_val > best_obj:
             best_obj = obj_val
-            best_density = params_filtered
+            best_density = params
 
-        if iteration % 20 == 0 or iteration == config.num_iterations - 1:
+        if iteration % 10 == 0 or iteration == config.num_iterations - 1:
             binarization = jnp.mean(jnp.abs(2 * params - 1))
             print(
-                f"  iter {iteration:4d}  |  obj: {obj_val:+12.6f}  |  "
-                f"beta: {beta:5.1f}  |  bin: {binarization:.3f}"
+                f"  iter {iteration:4d}  |  obj: {obj_float:+10.4f}  |  "
+                f"|grad|: {grad_norm:.2e}  |  beta: {beta:4.1f}  |  "
+                f"bin: {binarization:.3f}"
             )
 
-    print("=" * 60)
-    print(f"Best objective: {best_obj:+.3f}")
+    print("=" * 70)
+    print(f"Best objective: {float(best_obj):+.4f}")
 
     return best_density, history
 
@@ -586,10 +400,9 @@ def optimize(sim: dict, config: SimConfig) -> jnp.ndarray:
 # Validation
 # ============================================================================
 
-def validate_design(sim: dict, design_density: jnp.ndarray) -> dict:
-    """Validate the optimized design: check all 9 combos for correct routing."""
+def validate_design(sim, design_density):
     print("\nValidation: Testing all 9 input combinations")
-    print("=" * 60)
+    print("=" * 70)
 
     results = []
     all_pass = True
@@ -597,48 +410,48 @@ def validate_design(sim: dict, design_density: jnp.ndarray) -> dict:
     for trit_a, trit_b, product in INPUT_COMBOS:
         freq_a = INPUT_FREQUENCIES_THZ[trit_a]
         freq_b = INPUT_FREQUENCIES_THZ[trit_b]
+        product_freq = freq_a + freq_b
 
-        port_powers = run_forward(sim, design_density, freq_a, freq_b, beta=16.0)
+        port_powers = run_forward_bpm(sim, design_density, product_freq, beta=12.0)
 
         correct_port = PRODUCT_TO_PORT[product]
-        total_power = sum(port_powers.values())
-        correct_power = port_powers.get(product, 0)
+        total_power = sum(float(p) for p in port_powers.values())
+        correct_power = float(port_powers.get(product, 0))
 
-        # Find which port got the most power
-        max_product = max(port_powers, key=port_powers.get)
+        max_product = max(port_powers, key=lambda k: float(port_powers[k]))
         max_port = PRODUCT_TO_PORT[max_product]
 
-        # Extinction ratio (correct port vs next strongest wrong port)
-        wrong_powers = {p: pw for p, pw in port_powers.items() if p != product}
+        wrong_powers = {p: float(pw) for p, pw in port_powers.items() if p != product}
         max_wrong = max(wrong_powers.values()) if wrong_powers else 0
 
-        extinction_db = 10 * np.log10(correct_power / max_wrong) if max_wrong > 0 else float('inf')
+        if max_wrong > 0 and correct_power > 0:
+            extinction_db = 10 * np.log10(correct_power / max_wrong)
+        else:
+            extinction_db = float('inf') if correct_power > 0 else float('-inf')
 
         passed = (max_port == correct_port and extinction_db > 3.0)
         if not passed:
             all_pass = False
 
         result = {
-            "trit_a": trit_a,
-            "trit_b": trit_b,
-            "product": product,
-            "correct_port": correct_port,
-            "detected_port": max_port,
+            "trit_a": trit_a, "trit_b": trit_b, "product": product,
+            "correct_port": correct_port, "detected_port": max_port,
             "correct_power_fraction": correct_power / total_power if total_power > 0 else 0,
-            "extinction_ratio_db": extinction_db,
-            "passed": passed,
+            "extinction_ratio_db": extinction_db, "passed": passed,
         }
         results.append(result)
 
         status = "PASS" if passed else "FAIL"
+        pct = 100 * correct_power / total_power if total_power > 0 else 0
         print(
             f"  {trit_a} x {trit_b} = {product:>2}  |  "
-            f"port: {correct_port} (expect) -> {max_port} (got)  |  "
-            f"ER: {extinction_db:5.1f} dB  |  [{status}]"
+            f"port: {correct_port} -> {max_port}  |  "
+            f"ER: {extinction_db:+6.1f} dB  |  pwr: {pct:5.1f}%  |  [{status}]"
         )
 
-    print("=" * 60)
-    print(f"Result: {'ALL PASS' if all_pass else 'SOME FAILED'}")
+    print("=" * 70)
+    n_pass = sum(1 for r in results if r["passed"])
+    print(f"Result: {n_pass}/9 PASS {'— ALL PASS!' if all_pass else ''}")
 
     return {"results": results, "all_pass": all_pass}
 
@@ -647,92 +460,49 @@ def validate_design(sim: dict, design_density: jnp.ndarray) -> dict:
 # GDS Export
 # ============================================================================
 
-def export_gds(
-    sim: dict,
-    design_density: jnp.ndarray,
-    output_path: str = "trit_multiplier.gds",
-    threshold: float = 0.5,
-):
-    """Export the optimized design to GDS format for fabrication.
-
-    Requires gdstk (pip install gdstk).
-    """
+def export_gds(sim, design_density, output_path="trit_multiplier.gds", threshold=0.5):
     try:
         import gdstk
     except ImportError:
-        print("gdstk not installed. Install with: pip install gdstk")
-        print("Skipping GDS export.")
+        print("gdstk not installed — skipping GDS export")
         return None
 
     config = sim["config"]
     dr = sim["design_region"]
 
-    # Create GDS library
     lib = gdstk.Library(name="TritMultiplier")
     cell = lib.new_cell("MULTIPLIER")
 
-    # Convert density to binary (above threshold = core material)
     density_np = np.array(design_density)
     binary = density_np > threshold
 
-    # Design region polygons
     dx_um = config.dx * 1e6
     dy_um = config.dy * 1e6
     x_offset_um = dr["x0"] * dx_um
     y_offset_um = dr["y0"] * dy_um
 
-    # Create rectangles for each filled pixel
-    # (In production, use polygon merging for cleaner GDS)
     for ix in range(dr["nx"]):
         for iy in range(dr["ny"]):
             if binary[ix, iy]:
                 x0 = x_offset_um + ix * dx_um
                 y0 = y_offset_um + iy * dy_um
-                rect = gdstk.rectangle(
-                    (x0, y0), (x0 + dx_um, y0 + dy_um),
-                    layer=1, datatype=0
-                )
-                cell.add(rect)
+                cell.add(gdstk.rectangle(
+                    (x0, y0), (x0 + dx_um, y0 + dy_um), layer=1))
 
-    # Input waveguides
     for wg in sim["input_waveguides"]:
-        x0 = 0
-        x1 = wg["x_end"] * 1e6
-        y_center = wg["y_center"] * 1e6
+        y_c = wg["y_center"] * 1e6
         w = wg["width"] * 1e6
-        rect = gdstk.rectangle(
-            (x0, y_center - w/2), (x1, y_center + w/2),
-            layer=2, datatype=0
-        )
-        cell.add(rect)
+        cell.add(gdstk.rectangle((0, y_c - w/2), (wg["x_end"]*1e6, y_c + w/2), layer=2))
 
-    # Output waveguides
     for wg in sim["output_waveguides"]:
-        x0 = wg["x_start"] * 1e6
-        x1 = wg["x_end"] * 1e6
-        y_center = wg["y_center"] * 1e6
+        y_c = wg["y_center"] * 1e6
         w = wg["width"] * 1e6
-        rect = gdstk.rectangle(
-            (x0, y_center - w/2), (x1, y_center + w/2),
-            layer=2, datatype=0
-        )
-        cell.add(rect)
+        cell.add(gdstk.rectangle(
+            (wg["x_start"]*1e6, y_c - w/2), (wg["x_end"]*1e6, y_c + w/2), layer=2))
+        cell.add(gdstk.Label(f"P{wg['port_index']}={wg['product']}", (wg["x_end"]*1e6, y_c), layer=10))
 
-        # Port label
-        label = gdstk.Label(
-            f"P{wg['port_index']}={wg['product']}",
-            (x1, y_center),
-            layer=10
-        )
-        cell.add(label)
-
-    # Write GDS
     lib.write_gds(output_path)
-    print(f"\nGDS exported to: {output_path}")
-    print(f"  Design region layer: 1")
-    print(f"  Waveguide layer: 2")
-    print(f"  Port labels layer: 10")
-
+    print(f"\nGDS exported: {output_path} (design=L1, waveguides=L2, labels=L10)")
     return output_path
 
 
@@ -741,80 +511,61 @@ def export_gds(
 # ============================================================================
 
 def main():
-    print("=" * 60)
-    print("  FDTDX Inverse Design: Single Trit x Trit Multiplier")
+    print("=" * 70)
+    print("  Inverse Design: Trit Multiplier Wavelength Router (BPM)")
     print("  Unbalanced Ternary {1, 2, 3}")
-    print("=" * 60)
+    print("=" * 70)
 
-    # Print wavelength assignments
     print("\nInput wavelengths:")
     for trit, freq in sorted(INPUT_FREQUENCIES_THZ.items()):
-        wl = freq_to_wavelength_nm(freq)
-        print(f"  trit={trit}: {freq:.1f} THz ({wl:.2f} nm)")
+        print(f"  trit={trit}: {freq:.1f} THz ({freq_to_wavelength_nm(freq):.2f} nm)")
 
     print("\nProduct wavelengths (SFG output):")
     for product in PRODUCTS_BY_FREQ:
         freq = PRODUCT_FREQUENCIES_THZ[product]
-        wl = freq_to_wavelength_nm(freq)
-        port = PRODUCT_TO_PORT[product]
-        print(f"  product={product}: {freq:.1f} THz ({wl:.2f} nm) -> port {port}")
+        print(f"  product={product}: {freq:.1f} THz ({freq_to_wavelength_nm(freq):.2f} nm) -> port {PRODUCT_TO_PORT[product]}")
 
-    # Check frequency separation
     freqs_sorted = sorted(PRODUCT_FREQUENCIES_THZ.items(), key=lambda x: x[1])
-    min_gap = min(
-        freqs_sorted[i+1][1] - freqs_sorted[i][1]
-        for i in range(len(freqs_sorted) - 1)
-    )
+    min_gap = min(freqs_sorted[i+1][1] - freqs_sorted[i][1] for i in range(len(freqs_sorted) - 1))
     print(f"\nMinimum frequency separation: {min_gap:.1f} THz")
     assert min_gap >= 3.0, f"Insufficient separation: {min_gap} THz"
 
-    # Create simulation
     config = SimConfig()
     print(f"\nCreating simulation...")
     sim = create_simulation(config)
 
-    # Check for GPU
     devices = jax.devices()
     print(f"JAX devices: {devices}")
     if any(d.platform == 'gpu' for d in devices):
-        print("GPU detected - running on GPU")
+        print("GPU detected — running on GPU")
     else:
-        print("WARNING: No GPU detected. Simulation will be slow on CPU.")
-        print("For production runs, use GCP g2-standard-4 (NVIDIA L4) with CUDA 12.")
+        print("WARNING: No GPU detected. Will be slow on CPU.")
 
-    # Run optimization
     t0 = time.time()
     best_density, history = optimize(sim, config)
     elapsed = time.time() - t0
-    print(f"\nOptimization completed in {elapsed:.1f}s")
+    print(f"\nOptimization completed in {elapsed:.1f}s ({elapsed/config.num_iterations:.1f}s/iter)")
 
-    # Save results
     output_dir = Path(config.output_dir)
     output_dir.mkdir(exist_ok=True)
-
-    # Save design density
     np.save(output_dir / "design_density.npy", np.array(best_density))
-
-    # Save optimization history
     with open(output_dir / "optimization_history.json", "w") as f:
         json.dump(history, f, indent=2)
 
-    # Validate
     validation = validate_design(sim, best_density)
     with open(output_dir / "validation_results.json", "w") as f:
         json.dump(validation, f, indent=2, default=str)
 
-    # Export GDS
     gds_path = export_gds(sim, best_density, str(output_dir / "trit_multiplier.gds"))
 
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 70)
     print("  Output files:")
-    print(f"  {output_dir}/design_density.npy     - Optimized geometry")
-    print(f"  {output_dir}/optimization_history.json - Training curve")
-    print(f"  {output_dir}/validation_results.json  - Port routing test")
+    print(f"  {output_dir}/design_density.npy       — Optimized geometry")
+    print(f"  {output_dir}/optimization_history.json — Training curve")
+    print(f"  {output_dir}/validation_results.json   — Port routing test")
     if gds_path:
-        print(f"  {gds_path}                          - GDS for fab/GDSFactory")
-    print("=" * 60)
+        print(f"  {gds_path}")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
