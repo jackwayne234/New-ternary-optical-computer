@@ -110,15 +110,15 @@ class SimConfig:
                              # design parameter the optimizer will work with
 
     # Optimization
-    num_iterations: int = 200
-    learning_rate: float = 0.01
+    num_iterations: int = 500
+    learning_rate: float = 0.1
     min_feature_size: float = 80e-9  # 80 nm minimum feature (fab constraint)
 
     # PML (perfectly matched layer) boundary
     pml_thickness: int = 10  # grid cells
 
     # Time stepping
-    num_time_steps: int = 1000
+    num_time_steps: int = 500
     courant_factor: float = 0.5
 
     # Output
@@ -420,9 +420,8 @@ def run_forward(
     damp_y = jnp.exp(-sigma_y * dt / eps0)[None, :]   # (1, ny)
     damp_mask = damp_x * damp_y                         # (nx, ny)
 
-    # Source amplitude: scale to inject meaningful field energy
-    # Use impedance-matched amplitude for a 2D point source
-    source_scale = dx * 1e6  # scale factor for point source
+    # Source amplitude: scale for meaningful field energy in the design region
+    source_scale = 1.0  # normalized amplitude
 
     @jax.remat
     def fdtd_step(state, i):
@@ -525,8 +524,8 @@ def optimize(sim: dict, config: SimConfig) -> jnp.ndarray:
     opt_init, opt_update, get_params = optimizers.adam(config.learning_rate)
     opt_state = opt_init(design_density)
 
-    # Gradually increase binarization
-    beta_schedule = jnp.linspace(2.0, 16.0, config.num_iterations)
+    # Gradually increase binarization (start soft for better gradient flow)
+    beta_schedule = jnp.linspace(1.0, 16.0, config.num_iterations)
 
     # Min feature size in pixels
     min_feat_px = max(1, int(config.min_feature_size / config.dx))
@@ -570,11 +569,11 @@ def optimize(sim: dict, config: SimConfig) -> jnp.ndarray:
             best_obj = obj_val
             best_density = params_filtered
 
-        if iteration % 10 == 0 or iteration == config.num_iterations - 1:
+        if iteration % 20 == 0 or iteration == config.num_iterations - 1:
             binarization = jnp.mean(jnp.abs(2 * params - 1))
             print(
-                f"  iter {iteration:4d}  |  obj: {obj_val:+8.3f}  |  "
-                f"beta: {beta:5.1f}  |  binarization: {binarization:.3f}"
+                f"  iter {iteration:4d}  |  obj: {obj_val:+12.6f}  |  "
+                f"beta: {beta:5.1f}  |  bin: {binarization:.3f}"
             )
 
     print("=" * 60)
