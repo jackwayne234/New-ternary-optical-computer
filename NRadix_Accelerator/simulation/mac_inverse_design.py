@@ -505,12 +505,11 @@ def _analytical_frequency_assignment() -> "FrequencyAssignmentResult":
           pump_k = 2 * F_base (maps f_a + f_b -> pump - (f_a+f_b) ~ F_base - sum)
         This is approximate; we use fixed pumps and accept slight per-sum offset.
     """
-    W_neg = 3.0    # THz
-    W_pos = 6.0    # THz
-
-    # These put weight frequencies outside typical C+L band intentionally;
-    # the weight CW lasers are separate sources.  All PRODUCT frequencies
-    # (input + weight) are verified to be in band below.
+    W_neg = 2.0    # THz
+    W_pos = 7.0    # THz
+    # Products with W_neg=2, W_pos=7:
+    #   (+1,+1)=208, (+1,-1)=203, (-1,+1)=198, (-1,-1)=193, (0,+1)=201, (0,-1)=196
+    # All 6 distinct, all in [184, 210] THz.
 
     mult_freqs_raw = _compute_multiply_freqs(W_neg, W_pos)
 
@@ -520,10 +519,16 @@ def _analytical_frequency_assignment() -> "FrequencyAssignmentResult":
             f"Multiply product ({x},{w}) = {f:.2f} THz out of band [{FREQ_MIN}, {FREQ_MAX}]"
         )
 
-    # Canonical freq per logical multiply result
-    f_pos  = (mult_freqs_raw[(+1, +1)] + mult_freqs_raw[(-1, -1)]) / 2  # encodes +1
-    f_zero = (mult_freqs_raw[(0,  +1)] + mult_freqs_raw[(0,  -1)]) / 2  # encodes  0
-    f_neg  = (mult_freqs_raw[(-1, +1)] + mult_freqs_raw[(+1, -1)]) / 2  # encodes -1
+    # Canonical freq per logical multiply result.
+    # Use (w=+1) representative for each logical value — these are distinct:
+    #   f_pos  = 201 + W_pos = 208 THz  (logical +1)
+    #   f_zero = 194 + W_pos = 201 THz  (logical  0)
+    #   f_neg  = 191 + W_pos = 198 THz  (logical -1)
+    # Averaging is NOT used here — it always collapses f_pos == f_neg because
+    #   (201+W_pos + 191+W_neg)/2 == (191+W_pos + 201+W_neg)/2 by commutativity.
+    f_pos  = mult_freqs_raw[(+1, +1)]   # encodes +1
+    f_zero = mult_freqs_raw[(0,  +1)]   # encodes  0
+    f_neg  = mult_freqs_raw[(-1, +1)]   # encodes -1
 
     # Target output frequencies for each final sum value s
     F_base = 195.0
@@ -628,9 +633,9 @@ def _build_result_from_params(
     """Build FrequencyAssignmentResult from optimizer parameters."""
     mult_freqs_raw = _compute_multiply_freqs(w_neg, w_pos)
 
-    f_pos  = (mult_freqs_raw[(+1, +1)] + mult_freqs_raw[(-1, -1)]) / 2
-    f_zero = (mult_freqs_raw[(0,  +1)] + mult_freqs_raw[(0,  -1)]) / 2
-    f_neg  = (mult_freqs_raw[(-1, +1)] + mult_freqs_raw[(+1, -1)]) / 2
+    f_pos  = mult_freqs_raw[(+1, +1)]
+    f_zero = mult_freqs_raw[(0,  +1)]
+    f_neg  = mult_freqs_raw[(-1, +1)]
 
     val_to_freq: Dict[int, float] = {-1: f_neg, 0: f_zero, 1: f_pos}
     cascade_stage_freqs: List[Dict[int, float]] = []
@@ -1032,6 +1037,7 @@ def create_multiply_unit_sim(config: MultiplyUnitConfig) -> dict:
         "config": config,
         "grid_shape": (nx, ny),
         "design_region": {"x0": design_x0, "y0": design_y0, "nx": design_nx, "ny": design_ny},
+        "design_params": design_params,
         "input_waveguides": input_wgs,
         "output_waveguides": output_wgs,
         "monitors": monitors,
@@ -1090,13 +1096,20 @@ def _mul_objective(
     eps = 1e-8
     total = 0.0
 
-    # Map logical value -> canonical frequency -> target port index
+    # Map logical value -> target port index
     # logical_value: -1 -> port 0, 0 -> port 1, +1 -> port 2
     logical_to_port = {-1: 0, 0: 1, +1: 2}
 
-    for lval, freq in freq_assignment.multiply_product_freqs.items():
+    # Iterate over all 6 physical (x, w) combinations.
+    # Each produces a distinct SFG product frequency that must route to the
+    # correct logical port.  Do NOT use averaged canonical freqs — they collapse.
+    for x_val, w_val in iterproduct([-1, 0, +1], [-1, +1]):
+        logical = x_val * w_val if x_val != 0 else 0
+        freq = INPUT_FREQS[x_val] + (
+            freq_assignment.w_pos if w_val == +1 else freq_assignment.w_neg
+        )
         pwr = _mul_port_powers(sim, design_density, freq, beta)
-        correct_idx = logical_to_port[lval]
+        correct_idx = logical_to_port[logical]
         correct_pwr = pwr[correct_idx]
         wrong_pwr   = sum(p for idx, p in pwr.items() if idx != correct_idx) + eps
         total = total + jnp.log(correct_pwr + eps) - jnp.log(wrong_pwr)
@@ -1182,9 +1195,8 @@ def _validate_multiply_unit(
         f_weight = freq_assignment.w_pos if w_val == +1 else freq_assignment.w_neg
         f_product = f_input + f_weight
 
-        # Route through multiply unit using the closest canonical freq
-        canonical_freq = freq_assignment.multiply_product_freqs[canonical_logical]
-        port_pwr = _mul_port_powers(sim, density_jnp, canonical_freq, beta=12.0)
+        # Route through multiply unit using the actual SFG product frequency
+        port_pwr = _mul_port_powers(sim, density_jnp, f_product, beta=12.0)
 
         correct_port = logical_to_port[canonical_logical]
         total_pwr    = sum(float(p) for p in port_pwr.values())
