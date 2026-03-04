@@ -20,12 +20,28 @@
 #   # 4. Run
 #   bash NRadix_Accelerator/simulation/run_and_save.sh
 #
+# If your SSH connection drops: reconnect and run:
+#   tmux attach -t nradix
+#
 # RESUME FROM CHECKPOINT:
 #   If the run was interrupted, just re-run the same command.
 #   Stages 2 and 3 will detect their checkpoints and skip re-optimization.
 # =============================================================================
 
 set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Auto-launch inside tmux so SSH disconnects can't kill the process
+# ---------------------------------------------------------------------------
+if [ -z "${TMUX:-}" ]; then
+    echo ""
+    echo "  Not inside tmux. Launching tmux session 'nradix'..."
+    echo "  If you get disconnected, reconnect and run: tmux attach -t nradix"
+    echo ""
+    # Install tmux if missing (some RunPod images don't have it)
+    command -v tmux >/dev/null 2>&1 || apt-get install -y tmux -q
+    exec tmux new-session -s nradix "GITHUB_TOKEN=${GITHUB_TOKEN:-} bash $(realpath "$0")"
+fi
 
 # ---------------------------------------------------------------------------
 # Config
@@ -63,9 +79,7 @@ git config user.name "$GIT_NAME"
 git remote set-url origin "https://${GITHUB_TOKEN}@github.com/${REPO_OWNER}/${REPO_NAME}.git"
 
 # ---------------------------------------------------------------------------
-# Push-on-exit trap
-# Fires on: normal exit, Ctrl+C (SIGINT), kill (SIGTERM), and errors (ERR)
-# This ensures checkpoints are always pushed even if the run dies mid-way.
+# Push-on-exit — fires on normal exit, Ctrl+C, kill, SSH drop (SIGHUP)
 # ---------------------------------------------------------------------------
 _push_results() {
     local exit_code=$?
@@ -80,7 +94,6 @@ _push_results() {
 
     cd "$REPO_ROOT"
 
-    # Stage everything in results/ (includes .npy checkpoints, .json, .gds)
     if git add NRadix_Accelerator/simulation/results/ 2>/dev/null; then
         if git diff --cached --quiet; then
             echo "  Nothing new to push (results unchanged)."
@@ -101,7 +114,8 @@ _push_results() {
     fi
 }
 
-trap '_push_results' EXIT
+# Catch everything: normal exit, Ctrl+C, kill, and SSH disconnect (SIGHUP)
+trap '_push_results' EXIT SIGINT SIGTERM SIGHUP
 
 # ---------------------------------------------------------------------------
 # Run
@@ -112,6 +126,7 @@ echo "  NRadix MAC Inverse Design"
 echo "  Host:  $(hostname)"
 echo "  Start: $(date)"
 echo "  GPU:   $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'not detected')"
+echo "  tmux:  session 'nradix' (reconnect: tmux attach -t nradix)"
 echo "============================================================"
 echo ""
 
