@@ -1136,6 +1136,15 @@ def run_stage2_multiply_unit(
 
     sim = create_multiply_unit_sim(config)
 
+    # Checkpoint: skip optimization if a saved density already exists
+    ckpt_path = output_dir / "stage2_density_checkpoint.npy"
+    if ckpt_path.exists():
+        print(f"\n  [Checkpoint] Loading saved density from {ckpt_path}")
+        best_density = np.load(str(ckpt_path))
+        history = []
+        validation = _validate_multiply_unit(sim, best_density, freq_assignment)
+        return best_density, history, validation
+
     devices = jax.devices()
     print(f"\n  JAX devices: {devices}")
     gpu_present = any(d.platform == "gpu" for d in devices)
@@ -1164,6 +1173,10 @@ def run_stage2_multiply_unit(
     )
     elapsed = time.time() - t0
     print(f"\n  Stage 2 completed in {elapsed:.1f}s ({elapsed/config.num_iterations:.1f}s/iter)")
+
+    # Save checkpoint before validation so a crash here doesn't lose the run
+    np.save(str(ckpt_path), best_density)
+    print(f"  [Checkpoint] Density saved to {ckpt_path}")
 
     # Validate
     validation = _validate_multiply_unit(sim, best_density, freq_assignment)
@@ -1221,7 +1234,7 @@ def _validate_multiply_unit(
 
         results.append({
             "x": x_val, "w": w_val, "logical_result": canonical_logical,
-            "f_product_thz": f_product, "canonical_freq_thz": canonical_freq,
+            "f_product_thz": f_product, "canonical_freq_thz": freq_assignment.multiply_product_freqs[canonical_logical],
             "correct_port": correct_port, "detected_port": max_port,
             "correct_power_fraction": pct / 100.0,
             "extinction_ratio_db": er_db, "passed": passed,
