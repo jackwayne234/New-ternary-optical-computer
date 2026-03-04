@@ -1364,6 +1364,7 @@ def create_demux_sim(
         "freq_assignment": freq_assignment,
         "grid_shape": (nx, ny),
         "design_region": {"x0": design_x0, "y0": design_y0, "nx": design_nx, "ny": design_ny},
+        "design_params": design_params,
         "input_waveguides": input_wgs,
         "output_waveguides": output_wgs,
         "monitors": monitors,
@@ -1470,6 +1471,15 @@ def run_stage3_demux(
     n_ports = config.num_ports
     batch_size = config.batch_size
 
+    # Checkpoint: skip optimization if a saved density already exists
+    ckpt_path = output_dir / "stage3_density_checkpoint.npy"
+    if ckpt_path.exists():
+        print(f"\n  [Checkpoint] Loading saved density from {ckpt_path}")
+        best_density = np.load(str(ckpt_path))
+        history = []
+        validation = _validate_demux(sim, best_density, freq_assignment)
+        return best_density, history, validation
+
     devices = jax.devices()
     print(f"\n  JAX devices: {devices}")
     if not any(d.platform == "gpu" for d in devices):
@@ -1497,6 +1507,10 @@ def run_stage3_demux(
     )
     elapsed = time.time() - t0
     print(f"\n  Stage 3 completed in {elapsed:.1f}s ({elapsed/config.num_iterations:.1f}s/iter)")
+
+    # Save checkpoint before validation so a crash here doesn't lose the run
+    np.save(str(ckpt_path), best_density)
+    print(f"  [Checkpoint] Density saved to {ckpt_path}")
 
     validation = _validate_demux(sim, best_density, freq_assignment)
 
