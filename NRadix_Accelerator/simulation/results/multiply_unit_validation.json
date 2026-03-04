@@ -1,0 +1,78 @@
+{
+  "results": [
+    {
+      "x": -1,
+      "w": -1,
+      "logical_result": "1",
+      "f_product_thz": 193.0,
+      "canonical_freq_thz": 208.0,
+      "correct_port": 2,
+      "detected_port": 2,
+      "correct_power_fraction": 0.9993324800071697,
+      "extinction_ratio_db": 33.10489948917541,
+      "passed": "True"
+    },
+    {
+      "x": -1,
+      "w": 1,
+      "logical_result": "-1",
+      "f_product_thz": 198.0,
+      "canonical_freq_thz": 198.0,
+      "correct_port": 0,
+      "detected_port": 0,
+      "correct_power_fraction": 0.9988268177787412,
+      "extinction_ratio_db": 30.68667801134715,
+      "passed": "True"
+    },
+    {
+      "x": 0,
+      "w": -1,
+      "logical_result": 0,
+      "f_product_thz": 196.0,
+      "canonical_freq_thz": 201.0,
+      "correct_port": 1,
+      "detected_port": 1,
+      "correct_power_fraction": 0.9993705537105053,
+      "extinction_ratio_db": 34.001338069145035,
+      "passed": "True"
+    },
+    {
+      "x": 0,
+      "w": 1,
+      "logical_result": 0,
+      "f_product_thz": 201.0,
+      "canonical_freq_thz": 201.0,
+      "correct_port": 1,
+      "detected_port": 1,
+      "correct_power_fraction": 0.9995586867729598,
+      "extinction_ratio_db": 34.655905236314595,
+      "passed": "True"
+    },
+    {
+      "x": 1,
+      "w": -1,
+      "logical_result": "-1",
+      "f_product_thz": 203.0,
+      "canonical_freq_thz": 198.0,
+      "correct_port": 0,
+      "detected_port": 0,
+      "correct_power_fraction": 0.9992093794279515,
+      "extinction_ratio_db": 32.93338242557209,
+      "passed": "True"
+    },
+    {
+      "x": 1,
+      "w": 1,
+      "logical_result": "1",
+      "f_product_thz": 208.0,
+      "canonical_freq_thz": 208.0,
+      "correct_port": 2,
+      "detected_port": 2,
+      "correct_power_fraction": 0.9991232164791822,
+      "extinction_ratio_db": 32.25883572819085,
+      "passed": "True"
+    }
+  ],
+  "n_pass": 6,
+  "n_total": 6
+}

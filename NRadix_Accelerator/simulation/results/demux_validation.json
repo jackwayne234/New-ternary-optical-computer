@@ -1,0 +1,178 @@
+{
+  "results": [
+    {
+      "mac_value": -9,
+      "freq_thz": 192.3,
+      "correct_port": 0,
+      "detected_port": 0,
+      "correct_power_fraction": 0.9982406907394263,
+      "extinction_ratio_db": 36.52942283094096,
+      "passed": "True"
+    },
+    {
+      "mac_value": -8,
+      "freq_thz": 192.6,
+      "correct_port": 1,
+      "detected_port": 1,
+      "correct_power_fraction": 0.9973435437186369,
+      "extinction_ratio_db": 33.00882291984178,
+      "passed": "True"
+    },
+    {
+      "mac_value": -7,
+      "freq_thz": 192.9,
+      "correct_port": 2,
+      "detected_port": 2,
+      "correct_power_fraction": 0.9971578160788672,
+      "extinction_ratio_db": 30.78200401191518,
+      "passed": "True"
+    },
+    {
+      "mac_value": -6,
+      "freq_thz": 193.2,
+      "correct_port": 3,
+      "detected_port": 3,
+      "correct_power_fraction": 0.9976357309799847,
+      "extinction_ratio_db": 32.4001749039578,
+      "passed": "True"
+    },
+    {
+      "mac_value": -5,
+      "freq_thz": 193.5,
+      "correct_port": 4,
+      "detected_port": 4,
+      "correct_power_fraction": 0.997631737237035,
+      "extinction_ratio_db": 34.4511743623359,
+      "passed": "True"
+    },
+    {
+      "mac_value": -4,
+      "freq_thz": 193.8,
+      "correct_port": 5,
+      "detected_port": 5,
+      "correct_power_fraction": 0.23291050676681355,
+      "extinction_ratio_db": 1.4188203537109165,
+      "passed": "False"
+    },
+    {
+      "mac_value": -3,
+      "freq_thz": 194.1,
+      "correct_port": 6,
+      "detected_port": 6,
+      "correct_power_fraction": 0.9979409396466191,
+      "extinction_ratio_db": 34.61652441040875,
+      "passed": "True"
+    },
+    {
+      "mac_value": -2,
+      "freq_thz": 194.4,
+      "correct_port": 7,
+      "detected_port": 7,
+      "correct_power_fraction": 0.9965344116474044,
+      "extinction_ratio_db": 33.470109743370124,
+      "passed": "True"
+    },
+    {
+      "mac_value": -1,
+      "freq_thz": 194.7,
+      "correct_port": 8,
+      "detected_port": 8,
+      "correct_power_fraction": 0.9963500392468362,
+      "extinction_ratio_db": 32.85057891337268,
+      "passed": "True"
+    },
+    {
+      "mac_value": 0,
+      "freq_thz": 195.0,
+      "correct_port": 9,
+      "detected_port": 9,
+      "correct_power_fraction": 0.9976813473092888,
+      "extinction_ratio_db": 35.83669437160048,
+      "passed": "True"
+    },
+    {
+      "mac_value": 1,
+      "freq_thz": 195.3,
+      "correct_port": 10,
+      "detected_port": 10,
+      "correct_power_fraction": 0.3297460135474148,
+      "extinction_ratio_db": 3.804833830144394,
+      "passed": "True"
+    },
+    {
+      "mac_value": 2,
+      "freq_thz": 195.6,
+      "correct_port": 11,
+      "detected_port": 11,
+      "correct_power_fraction": 0.9983628350624119,
+      "extinction_ratio_db": 36.52438867768409,
+      "passed": "True"
+    },
+    {
+      "mac_value": 3,
+      "freq_thz": 195.9,
+      "correct_port": 12,
+      "detected_port": 12,
+      "correct_power_fraction": 0.9981883341412825,
+      "extinction_ratio_db": 36.9085084475659,
+      "passed": "True"
+    },
+    {
+      "mac_value": 4,
+      "freq_thz": 196.2,
+      "correct_port": 13,
+      "detected_port": 13,
+      "correct_power_fraction": 0.464748307013265,
+      "extinction_ratio_db": 6.170779179669439,
+      "passed": "True"
+    },
+    {
+      "mac_value": 5,
+      "freq_thz": 196.5,
+      "correct_port": 14,
+      "detected_port": 14,
+      "correct_power_fraction": 0.9984165109650829,
+      "extinction_ratio_db": 37.11179188277069,
+      "passed": "True"
+    },
+    {
+      "mac_value": 6,
+      "freq_thz": 196.8,
+      "correct_port": 15,
+      "detected_port": 15,
+      "correct_power_fraction": 0.5855910448508019,
+      "extinction_ratio_db": 7.943666375245298,
+      "passed": "True"
+    },
+    {
+      "mac_value": 7,
+      "freq_thz": 197.1,
+      "correct_port": 16,
+      "detected_port": 16,
+      "correct_power_fraction": 0.9969215969428921,
+      "extinction_ratio_db": 33.59482943734241,
+      "passed": "True"
+    },
+    {
+      "mac_value": 8,
+      "freq_thz": 197.4,
+      "correct_port": 17,
+      "detected_port": 17,
+      "correct_power_fraction": 0.9974861475427058,
+      "extinction_ratio_db": 31.62689279349381,
+      "passed": "True"
+    },
+    {
+      "mac_value": 9,
+      "freq_thz": 197.7,
+      "correct_port": 18,
+      "detected_port": 18,
+      "correct_power_fraction": 0.9970734554797412,
+      "extinction_ratio_db": 33.94535230696249,
+      "passed": "True"
+    }
+  ],
+  "n_pass": 18,
+  "n_total": 19,
+  "all_pass": false
+}
