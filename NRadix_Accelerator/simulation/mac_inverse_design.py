@@ -574,15 +574,17 @@ def _analytical_frequency_assignment() -> "FrequencyAssignmentResult":
     # Build output frequency structures
     # 19 unique answer values -> 19 unique channels
     # Arrange as: port = value + 9 (0..18), sub_freq_idx = 0
+    # Clip to valid MAC range [-N_INPUTS, +N_INPUTS] and use target_freq()
+    # directly so all output channels land in C-band regardless of cascade drift.
     value_to_channel: Dict[int, Tuple[int, int]] = {}
     channel_to_freq: Dict[Tuple[int, int], float] = {}
     output_freqs_81 = np.zeros((9, 9))
 
-    all_values = sorted(val_to_freq.keys())
-    for val in all_values:
+    valid_values = range(-N_INPUTS, N_INPUTS + 1)  # -9..+9 only
+    for val in valid_values:
         port = val + N_INPUTS  # 0..18
         sub  = 0
-        f    = val_to_freq[val]
+        f    = target_freq(val)  # use ideal target, not cascade-drifted freq
         value_to_channel[val] = (port, sub)
         channel_to_freq[(port, sub)] = f
         if port < 9 and sub < 9:
