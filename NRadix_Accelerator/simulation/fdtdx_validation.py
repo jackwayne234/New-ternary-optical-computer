@@ -403,7 +403,7 @@ def run_fdtd_jax(
         Ez_max  = float(jnp.abs(carry[0]).max())
         print(f"    step {s1:6d}/{n_steps}  |  {frac*100:.0f}%  |  "
               f"elapsed: {elapsed:.1f}s  |  ETA: {eta:.1f}s  |  "
-              f"|Ez|_max: {Ez_max:.3e}")
+              f"|Hz|_max: {Ez_max:.3e}")
 
     # ---- Extract DFT results ----
     *_, dft_ro, dft_io, dft_rs, dft_is = carry
@@ -807,7 +807,7 @@ def compare_with_bpm(fdtd_results: dict, results_dir: Path) -> dict:
 def main():
     print("=" * 70)
     print("  NRadix FDTD Electromagnetic Validation")
-    print("  2D TM-mode Maxwell solver with CPML boundaries")
+    print("  2D TE-mode Maxwell solver with CPML boundaries")
     print("=" * 70)
     print(f"\n  Grid: {DX*1e9:.0f} nm  |  dt: {DT*1e15:.3f} fs  |  "
           f"Source: {SOURCE_F_CENTER*1e-12:.0f} THz ± {SOURCE_BW*1e-12:.0f} THz")
@@ -867,7 +867,7 @@ def main():
 
     # ----- Assemble final output -----
     output = {
-        "method": "2D TM-mode FDTD with CPML boundaries",
+        "method": "2D TE-mode FDTD with CPML boundaries",
         "grid_spacing_nm": DX * 1e9,
         "dt_fs": DT * 1e15,
         "pml_cells": PML_CELLS,
