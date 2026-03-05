@@ -297,70 +297,87 @@ def run_fdtd_jax(
     out_x     = nx - PML_CELLS - 5
     src_y_mon = int(y_c / DY)
 
-    # ---- Single step function (JIT-compiled via lax.scan) ----
+    # ---- Single step function: 2D TE mode (Hz, Ex, Ey) ----
+    #
+    # TE mode matches the BPM scalar simulation (Ey dominant, E in-plane).
+    # Fields on Yee grid:
+    #   Hz(i,j) at (i+0.5, j+0.5) — face center
+    #   Ex(i,j) at (i+0.5, j)     — x-edge
+    #   Ey(i,j) at (i,     j+0.5) — y-edge
+    # Update order: H → E
+    #   Hz += dt/μ₀ * [∂Ey/∂x - ∂Ex/∂y]
+    #   Ex += dt/(ε₀εr) * ∂Hz/∂y
+    #   Ey -= dt/(ε₀εr) * ∂Hz/∂x
     def step_fn(carry, t_idx):
-        Ez, Hx, Hy, psi_Hx_y, psi_Hy_x, psi_Ez_x, psi_Ez_y, \
+        Hz, Ex, Ey, psi_Hz_x, psi_Hz_y, psi_Ex_y, psi_Ey_x, \
             dft_ro, dft_io, dft_rs, dft_is = carry
 
         t = jnp.float32(t_idx) * DT_F
 
-        # --- H update ---
-        dEz_dy = (Ez[:, 1:] - Ez[:, :-1]) * inv_DY          # (nx, ny-1)
-        new_psi_Hx_y = psi_Hx_y.at[:, :-1].set(
-            bhy_j[:, :-1] * psi_Hx_y[:, :-1] + chy_j[:, :-1] * dEz_dy)
-        Hx = Hx.at[:, :-1].add(
-            -dt_mu * (dEz_dy / khy_j[:, :-1] + new_psi_Hx_y[:, :-1]))
+        # --- Hz update ---
+        dEy_dx = (Ey[1:, :] - Ey[:-1, :]) * inv_DX          # (nx-1, ny)
+        dEx_dy = (Ex[:, 1:] - Ex[:, :-1]) * inv_DY           # (nx, ny-1)
 
-        dEz_dx = (Ez[1:, :] - Ez[:-1, :]) * inv_DX          # (nx-1, ny)
-        new_psi_Hy_x = psi_Hy_x.at[:-1, :].set(
-            bhx_j[:-1] * psi_Hy_x[:-1, :] + chx_j[:-1] * dEz_dx)
-        Hy = Hy.at[:-1, :].add(
-            dt_mu * (dEz_dx / khx_j[:-1] + new_psi_Hy_x[:-1, :]))
+        new_psi_Hz_x = psi_Hz_x.at[:-1, :].set(
+            bhx_j[:-1] * psi_Hz_x[:-1, :] + chx_j[:-1] * dEy_dx)
+        new_psi_Hz_y = psi_Hz_y.at[:, :-1].set(
+            bhy_j[:, :-1] * psi_Hz_y[:, :-1] + chy_j[:, :-1] * dEx_dy)
 
-        # --- E update ---
-        dHy_dx = (Hy[1:, :] - Hy[:-1, :]) * inv_DX          # (nx-1, ny)
-        dHx_dy = (Hx[:, 1:] - Hx[:, :-1]) * inv_DY          # (nx, ny-1)
-
-        new_psi_Ez_x = psi_Ez_x.at[1:, :].set(
-            bex_j[1:] * psi_Ez_x[1:, :] + cex_j[1:] * dHy_dx)
-        new_psi_Ez_y = psi_Ez_y.at[:, 1:].set(
-            bey_j[:, 1:] * psi_Ez_y[:, 1:] + cey_j[:, 1:] * dHx_dy)
-
-        Ez = Ez.at[1:, 1:].add(coeff_E[1:, 1:] * (
-            dHy_dx[:, 1:] / kex_j[1:] + new_psi_Ez_x[1:, 1:]
-          - dHx_dy[1:, :] / key_j[:, 1:] - new_psi_Ez_y[1:, 1:]
+        Hz = Hz.at[:-1, :-1].add(dt_mu * (
+            dEy_dx[:, :-1] / khx_j[:-1] + new_psi_Hz_x[:-1, :-1]
+          - dEx_dy[:-1, :] / khy_j[:, :-1] - new_psi_Hz_y[:-1, :-1]
         ))
 
-        # --- Soft source ---
+        # --- Ex update: ∂Hz/∂y ---
+        dHz_dy = (Hz[:, 1:] - Hz[:, :-1]) * inv_DY           # (nx, ny-1)
+
+        new_psi_Ex_y = psi_Ex_y.at[:, 1:].set(
+            bey_j[:, 1:] * psi_Ex_y[:, 1:] + cey_j[:, 1:] * dHz_dy)
+
+        Ex = Ex.at[:, 1:].add(coeff_E[:, 1:] * (
+            dHz_dy / key_j[:, 1:] + new_psi_Ex_y[:, 1:]
+        ))
+
+        # --- Ey update: -∂Hz/∂x ---
+        dHz_dx = (Hz[1:, :] - Hz[:-1, :]) * inv_DX           # (nx-1, ny)
+
+        new_psi_Ey_x = psi_Ey_x.at[1:, :].set(
+            bex_j[1:] * psi_Ey_x[1:, :] + cex_j[1:] * dHz_dx)
+
+        Ey = Ey.at[1:, :].add(-coeff_E[1:, :] * (
+            dHz_dx / kex_j[1:] + new_psi_Ey_x[1:, :]
+        ))
+
+        # --- Soft source: inject Ey at input waveguide (TE mode) ---
         src_amp = (jnp.exp(-((t - t0_f) / tau_f) ** 2)
                    * jnp.sin(twopi * fc_f * t))
-        Ez = Ez.at[source_x_cell, src_y_lo:src_y_hi].add(
+        Ey = Ey.at[source_x_cell, src_y_lo:src_y_hi].add(
             src_amp * src_prof_slice)
 
-        # --- DFT accumulation ---
-        phase  = omega_j * t                        # (n_freqs,)
-        cos_p  = jnp.cos(phase)
-        sin_p  = jnp.sin(phase)
-        Ez_out = Ez[out_x, mon_y_idx]               # (n_monitors,)
-        Ez_s   = Ez[source_x_cell, src_y_mon]       # scalar
+        # --- DFT: monitor Ey at output cross-section ---
+        phase   = omega_j * t
+        cos_p   = jnp.cos(phase)
+        sin_p   = jnp.sin(phase)
+        Ey_out  = Ey[out_x, mon_y_idx]             # (n_monitors,)
+        Ey_s    = Ey[source_x_cell, src_y_mon]     # scalar
 
-        dft_ro = dft_ro + jnp.outer(cos_p, Ez_out)
-        dft_io = dft_io + jnp.outer(sin_p, Ez_out)
-        dft_rs = dft_rs + cos_p * Ez_s
-        dft_is = dft_is + sin_p * Ez_s
+        dft_ro = dft_ro + jnp.outer(cos_p, Ey_out)
+        dft_io = dft_io + jnp.outer(sin_p, Ey_out)
+        dft_rs = dft_rs + cos_p * Ey_s
+        dft_is = dft_is + sin_p * Ey_s
 
-        return (Ez, Hx, Hy, new_psi_Hx_y, new_psi_Hy_x, new_psi_Ez_x, new_psi_Ez_y,
+        return (Hz, Ex, Ey, new_psi_Hz_x, new_psi_Hz_y, new_psi_Ex_y, new_psi_Ey_x,
                 dft_ro, dft_io, dft_rs, dft_is), None
 
     # ---- Initial state ----
     zeros2 = lambda: jnp.zeros((nx, ny), dtype=jnp.float32)
     carry = (
-        zeros2(), zeros2(), zeros2(),          # Ez, Hx, Hy
+        zeros2(), zeros2(), zeros2(),            # Hz, Ex, Ey
         zeros2(), zeros2(), zeros2(), zeros2(),  # psi ×4
-        jnp.zeros((n_freqs, n_monitors), dtype=jnp.float32),  # dft_ro
-        jnp.zeros((n_freqs, n_monitors), dtype=jnp.float32),  # dft_io
-        jnp.zeros(n_freqs, dtype=jnp.float32),                # dft_rs
-        jnp.zeros(n_freqs, dtype=jnp.float32),                # dft_is
+        jnp.zeros((n_freqs, n_monitors), dtype=jnp.float32),
+        jnp.zeros((n_freqs, n_monitors), dtype=jnp.float32),
+        jnp.zeros(n_freqs, dtype=jnp.float32),
+        jnp.zeros(n_freqs, dtype=jnp.float32),
     )
 
     # ---- Run in chunks for progress reporting ----
