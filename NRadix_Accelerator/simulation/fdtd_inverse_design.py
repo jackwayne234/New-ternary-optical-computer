@@ -265,7 +265,6 @@ def run_fdtd_differentiable(
     # ------------------------------------------------------------------
     # 5. Step function (TE: Hz, Ex, Ey)
     # ------------------------------------------------------------------
-    @functools.partial(jax.checkpoint)
     def step_fn(carry, t_idx):
         (Hz, Ex, Ey,
          psi_Hz_x, psi_Hz_y,
@@ -375,14 +374,21 @@ def run_fdtd_differentiable(
                   dft_rs, dft_is)
 
     # ------------------------------------------------------------------
-    # 6 (cont). Run full scan — JAX handles the entire computation graph
-    # NO chunking loop: this is the differentiable version
+    # 6 (cont). Nested scan with outer checkpoint — memory-efficient autodiff.
+    # lax.scan over all n_steps stores every carry for backprop (~104 GB).
+    # Fix: outer scan over n_chunks, inner scan over chunk_size steps.
+    # Checkpoint at outer level stores only n_chunks carries (~1 GB).
     # ------------------------------------------------------------------
-    final_carry, _ = jax.lax.scan(
-        step_fn,
-        init_carry,
-        jnp.arange(n_steps, dtype=jnp.int32),
-    )
+    CHUNK_SIZE = 200
+    n_chunks = n_steps // CHUNK_SIZE
+    t_indices_2d = jnp.arange(n_steps, dtype=jnp.int32).reshape(n_chunks, CHUNK_SIZE)
+
+    @jax.checkpoint
+    def scan_chunk(carry, chunk_t_indices):
+        carry, _ = jax.lax.scan(step_fn, carry, chunk_t_indices)
+        return carry, None
+
+    final_carry, _ = jax.lax.scan(scan_chunk, init_carry, t_indices_2d)
 
     # ------------------------------------------------------------------
     # 7. Extract DFT accumulators and compute power spectra
