@@ -320,26 +320,27 @@ def run_fdtd_broadband(
         # === Update H fields ===
         # Hx: dEz/dy (y-direction derivative)
         dEz_dy = (Ez[:, 1:] - Ez[:, :-1]) / DY    # shape (nx, ny-1)
-        # CPML in y for Hx (broadcast khy2 etc. → shape (nx, ny-1))
-        psi_Hx_y[:, :-1] = bhy2[0, :-1] * psi_Hx_y[:, :-1] + chy2[0, :-1] * dEz_dy / DY
-        Hx[:, :-1] -= dt_mu * (dEz_dy / (khy2[0, :-1] * DY) + psi_Hx_y[:, :-1])
+        # CPML in y for Hx — keep trailing dim via [:, :-1] not [0, :-1]
+        psi_Hx_y[:, :-1] = bhy2[:, :-1] * psi_Hx_y[:, :-1] + chy2[:, :-1] * dEz_dy / DY
+        Hx[:, :-1] -= dt_mu * (dEz_dy / (khy2[:, :-1] * DY) + psi_Hx_y[:, :-1])
 
         # Hy: dEz/dx (x-direction derivative)
         dEz_dx = (Ez[1:, :] - Ez[:-1, :]) / DX    # shape (nx-1, ny)
-        psi_Hy_x[:-1, :] = bhx2[:-1, 0] * psi_Hy_x[:-1, :] + chx2[:-1, 0] * dEz_dx / DX
-        Hy[:-1, :] += dt_mu * (dEz_dx / (khx2[:-1, 0] * DX) + psi_Hy_x[:-1, :])
+        # Keep leading dim via [:-1] not [:-1, 0]
+        psi_Hy_x[:-1, :] = bhx2[:-1] * psi_Hy_x[:-1, :] + chx2[:-1] * dEz_dx / DX
+        Hy[:-1, :] += dt_mu * (dEz_dx / (khx2[:-1] * DX) + psi_Hy_x[:-1, :])
 
         # === Update E field ===
         # Ez: dHy/dx - dHx/dy
-        dHy_dx = (Hy[1:, :] - Hy[:-1, :]) / DX    # shape (nx-1, ny)  -- at cells 1..nx-1
+        dHy_dx = (Hy[1:, :] - Hy[:-1, :]) / DX    # shape (nx-1, ny)
         dHx_dy = (Hx[:, 1:] - Hx[:, :-1]) / DY    # shape (nx, ny-1)
 
-        psi_Ez_x[1:, :] = bex2[1:, 0] * psi_Ez_x[1:, :] + cex2[1:, 0] * dHy_dx / DX
-        psi_Ez_y[:, 1:] = bey2[0, 1:] * psi_Ez_y[:, 1:] + cey2[0, 1:] * dHx_dy / DY
+        psi_Ez_x[1:, :] = bex2[1:] * psi_Ez_x[1:, :] + cex2[1:] * dHy_dx / DX
+        psi_Ez_y[:, 1:] = bey2[:, 1:] * psi_Ez_y[:, 1:] + cey2[:, 1:] * dHx_dy / DY
 
         Ez[1:, 1:] += dt_eps[1:, 1:] * EPS0 * (
-            dHy_dx[:, 1:] / (kex2[1:, 0] * DX) + psi_Ez_x[1:, 1:]
-          - dHx_dy[1:, :] / (key2[0, 1:] * DY) - psi_Ez_y[1:, 1:]
+            dHy_dx[:, 1:] / (kex2[1:] * DX) + psi_Ez_x[1:, 1:]
+          - dHx_dy[1:, :] / (key2[:, 1:] * DY) - psi_Ez_y[1:, 1:]
         )
 
         # === Soft source injection ===
