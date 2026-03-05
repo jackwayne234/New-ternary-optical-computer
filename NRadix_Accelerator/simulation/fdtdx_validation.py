@@ -324,8 +324,8 @@ def run_fdtd_jax(
             bhy_j[:, :-1] * psi_Hz_y[:, :-1] + chy_j[:, :-1] * dEx_dy)
 
         Hz = Hz.at[:-1, :-1].add(dt_mu * (
-            dEy_dx[:, :-1] / khx_j[:-1] + new_psi_Hz_x[:-1, :-1]
-          - dEx_dy[:-1, :] / khy_j[:, :-1] - new_psi_Hz_y[:-1, :-1]
+            dEx_dy[:-1, :] / khy_j[:, :-1] + new_psi_Hz_y[:-1, :-1]
+          - dEy_dx[:, :-1] / khx_j[:-1] - new_psi_Hz_x[:-1, :-1]
         ))
 
         # --- Ex update: ∂Hz/∂y ---
