@@ -200,12 +200,8 @@ def run_fdtd_differentiable(
     # 2. CPML coefficients (numpy — not differentiable, that is fine)
     # ------------------------------------------------------------------
     # X-direction CPML (applied to Ey, Hz rows)
-    sig_ex, b_ex, c_ex, k_ex = build_cpml_sigma(nx)   # each length nx
-    sig_hx, b_hx, c_hx, k_hx = build_cpml_sigma(nx)
-
-    # Y-direction CPML (applied to Ex, Hz columns)
-    sig_ey, b_ey, c_ey, k_ey = build_cpml_sigma(ny)
-    sig_hy, b_hy, c_hy, k_hy = build_cpml_sigma(ny)
+    b_ex, c_ex, k_ex, b_hx, c_hx, k_hx = build_cpml_sigma(nx)
+    b_ey, c_ey, k_ey, b_hy, c_hy, k_hy = build_cpml_sigma(ny)
 
     # Reshape for broadcasting: x-direction -> (nx, 1), y-direction -> (1, ny)
     bex_j = jnp.array(b_ex, dtype=jnp.float32).reshape(nx, 1)
