@@ -156,7 +156,8 @@ def build_cpml_sigma(n_cells: int, pml_cells: int = PML_CELLS) -> Tuple[np.ndarr
         sigma_h : H-field conductivity (at H-field positions, offset by 0.5 cell)
         b, c    : precomputed CPML coefficients for E and H update
     """
-    sigma_max = -(PML_ORDER + 1) * C_LIGHT * np.log(PML_R0) / (2.0 * PML_CELLS * DX * N_CLAD)
+    # Taflove (2005): σ_opt = (m+1)*ln(1/R₀) / (2·η₀·n·d)
+    sigma_max = -(PML_ORDER + 1) * np.log(PML_R0) / (2.0 * ETA0 * N_CLAD * PML_CELLS * DX)
 
     sigma_e = np.zeros(n_cells, dtype=np.float64)
     sigma_h = np.zeros(n_cells, dtype=np.float64)
