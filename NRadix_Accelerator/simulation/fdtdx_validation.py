@@ -302,15 +302,9 @@ def run_fdtd_broadband(
     dft_Ez_real_src = np.zeros(n_freqs, dtype=np.float64)
     dft_Ez_imag_src = np.zeros(n_freqs, dtype=np.float64)
 
-    # Monitor positions: use a column at the output waveguide start x
-    # and the specified y-cell
+    # Monitor positions: measure near end of domain, past output waveguides
     monitor_y_cells = [m["grid_y"] for m in output_monitors]
-    monitor_x_cell  = min(int(input_wg["x_end"] / DX) + nx // 2,
-                          nx - PML_CELLS - 2)  # near output end
-
-    # Find the output x position from the output_monitors (use x_start of wg)
-    # Default to ~80% of domain length
-    out_x_cell = int(nx * 0.85)
+    out_x_cell = nx - PML_CELLS - 5   # last valid cell before right PML
 
     t_start = time.time()
 
@@ -341,14 +335,12 @@ def run_fdtd_broadband(
         )
 
         # === Soft source injection ===
+        # Add directly to Ez — no dt/eps scaling, just amplitude 1 V/m
         src_amp = (
             np.exp(-((t - SOURCE_T0) / SOURCE_TAU) ** 2)
             * np.sin(2.0 * np.pi * SOURCE_F_CENTER * t)
         )
-        Ez[source_x_cell, src_y_lo:src_y_hi] += (
-            dt_eps[source_x_cell, src_y_lo:src_y_hi] * EPS0 * src_amp
-            * src_profile[src_y_lo:src_y_hi] * 1.0
-        )
+        Ez[source_x_cell, src_y_lo:src_y_hi] += src_amp * src_profile[src_y_lo:src_y_hi]
 
         # === Accumulate DFT ===
         phase = omega * t
