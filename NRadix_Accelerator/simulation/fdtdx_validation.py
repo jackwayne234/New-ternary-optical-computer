@@ -223,156 +223,181 @@ def build_cpml_sigma(n_cells: int, pml_cells: int = PML_CELLS) -> Tuple[np.ndarr
 #
 # With CPML: add auxiliary ψ fields in the PML regions.
 
-def run_fdtd_broadband(
+def run_fdtd_jax(
     n_profile: np.ndarray,
     input_wg: dict,
     output_monitors: list,
     target_freqs_hz: np.ndarray,
     n_steps: int,
     source_x_cell: int,
-    print_every: int = 5000,
+    chunk_size: int = 5000,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Run broadband FDTD and return DFT power at each (target_freq, monitor_y) pair.
+    JAX-compiled broadband FDTD using lax.scan — runs entirely on GPU.
 
-    Args:
-        n_profile       : (nx, ny) refractive index array
-        input_wg        : dict with y_center, width, x_end
-        output_monitors : list of dicts with grid_y (y-cell index for power monitor)
-        target_freqs_hz : (n_freqs,) array of target frequencies in Hz
-        n_steps         : number of FDTD time steps
-        source_x_cell   : x-cell index where the source Ez is injected
+    The full time loop is compiled to a single XLA kernel via jax.lax.scan.
+    Progress is printed every chunk_size steps (requires a short sync per chunk).
 
     Returns:
         P_out : (n_freqs, n_monitors) DFT power at output ports
-        P_src : (n_freqs,) DFT power at source (for normalization)
+        P_src : (n_freqs,) DFT power at source
     """
-    nx, ny = n_profile.shape
-    n_freqs   = len(target_freqs_hz)
+    nx, ny     = n_profile.shape
+    n_freqs    = len(target_freqs_hz)
     n_monitors = len(output_monitors)
 
-    print(f"  FDTD grid: {nx}×{ny} = {nx*ny:,} cells")
+    print(f"  FDTD grid: {nx}×{ny} = {nx*ny:,} cells  [JAX/GPU]")
     print(f"  Time steps: {n_steps} ({n_steps*DT*1e12:.2f} ps)")
-    print(f"  Target frequencies: {n_freqs}")
-    print(f"  Output monitors: {n_monitors}")
+    print(f"  Target freqs: {n_freqs}  |  Monitors: {n_monitors}")
 
-    # ----- Permittivity -----
-    eps_r = n_profile ** 2  # shape (nx, ny)
-    dt_eps = (DT / EPS0) / eps_r   # dt/(eps0 * eps_r)
-    dt_mu  = DT / MU0
+    # ---- Pre-compute constants (all as float32 JAX arrays) ----
+    inv_DX = jnp.float32(1.0 / DX)
+    inv_DY = jnp.float32(1.0 / DY)
+    dt_mu  = jnp.float32(DT / MU0)
+    DT_F   = jnp.float32(DT)
 
-    # ----- CPML coefficients -----
-    bex, cex, kex, bhx, chx, khx = build_cpml_sigma(nx)   # x-direction (for Hy, Ez)
-    bey, cey, key, bhy, chy, khy = build_cpml_sigma(ny)   # y-direction (for Hx, Ez)
+    # E-field update coefficient: dt/(ε₀·ε_r)  shape (nx, ny)
+    coeff_E = jnp.array(DT / (EPS0 * n_profile ** 2), dtype=jnp.float32)
 
-    # Broadcast to 2D:  shape (nx, 1) or (1, ny)
-    bex2 = bex[:, None]; cex2 = cex[:, None]; kex2 = kex[:, None]
-    bhx2 = bhx[:, None]; chx2 = chx[:, None]; khx2 = khx[:, None]
-    bey2 = bey[None, :]; cey2 = cey[None, :]; key2 = key[None, :]
-    bhy2 = bhy[None, :]; chy2 = chy[None, :]; khy2 = khy[None, :]
+    # CPML coefficients → float32 JAX, broadcast to 2D
+    bex, cex, kex, bhx, chx, khx = build_cpml_sigma(nx)
+    bey, cey, key, bhy, chy, khy = build_cpml_sigma(ny)
 
-    # ----- Source: Gaussian-modulated CW -----
-    # E_z soft source injected into input waveguide cross-section
-    ny_arr = np.arange(ny) * DY
-    y_c    = input_wg["y_center"]
-    bw     = input_wg["width"]
-    src_profile = np.exp(-((ny_arr - y_c) / bw) ** 2).astype(np.float32)
-    src_y_lo = int((y_c - bw * 2) / DY)
-    src_y_hi = int((y_c + bw * 2) / DY) + 1
-    src_y_lo = max(src_y_lo, PML_CELLS + 1)
-    src_y_hi = min(src_y_hi, ny - PML_CELLS - 1)
+    bex_j = jnp.array(bex[:, None], dtype=jnp.float32)
+    cex_j = jnp.array(cex[:, None], dtype=jnp.float32)
+    kex_j = jnp.array(kex[:, None], dtype=jnp.float32)
+    bhx_j = jnp.array(bhx[:, None], dtype=jnp.float32)
+    chx_j = jnp.array(chx[:, None], dtype=jnp.float32)
+    khx_j = jnp.array(khx[:, None], dtype=jnp.float32)
+    bey_j = jnp.array(bey[None, :], dtype=jnp.float32)
+    cey_j = jnp.array(cey[None, :], dtype=jnp.float32)
+    key_j = jnp.array(key[None, :], dtype=jnp.float32)
+    bhy_j = jnp.array(bhy[None, :], dtype=jnp.float32)
+    chy_j = jnp.array(chy[None, :], dtype=jnp.float32)
+    khy_j = jnp.array(khy[None, :], dtype=jnp.float32)
 
-    # ----- Initialize fields -----
-    Ez  = np.zeros((nx, ny), dtype=np.float32)
-    Hx  = np.zeros((nx, ny), dtype=np.float32)
-    Hy  = np.zeros((nx, ny), dtype=np.float32)
+    # Source parameters
+    y_c  = input_wg["y_center"]
+    bw   = input_wg["width"]
+    ny_arr = jnp.arange(ny, dtype=jnp.float32) * jnp.float32(DY)
+    src_profile = jnp.exp(-((ny_arr - jnp.float32(y_c)) / jnp.float32(bw)) ** 2)
+    src_y_lo = max(int((y_c - bw * 2) / DY), PML_CELLS + 1)
+    src_y_hi = min(int((y_c + bw * 2) / DY) + 1, ny - PML_CELLS - 1)
+    src_prof_slice = src_profile[src_y_lo:src_y_hi]   # constant slice
 
-    # CPML auxiliary: ψ for each PML region
-    psi_Hy_x = np.zeros((nx, ny), dtype=np.float32)   # for dEz/dx in Hy update
-    psi_Hx_y = np.zeros((nx, ny), dtype=np.float32)   # for dEz/dy in Hx update
-    psi_Ez_x = np.zeros((nx, ny), dtype=np.float32)   # for dHy/dx in Ez update
-    psi_Ez_y = np.zeros((nx, ny), dtype=np.float32)   # for dHx/dy in Ez update
+    t0_f  = jnp.float32(SOURCE_T0)
+    tau_f = jnp.float32(SOURCE_TAU)
+    fc_f  = jnp.float32(SOURCE_F_CENTER)
+    twopi = jnp.float32(2.0 * math.pi)
 
-    # ----- DFT accumulators -----
-    # For each frequency: accumulate output power at each monitor y-position
-    # and source power at injection x-position
-    omega = 2.0 * np.pi * target_freqs_hz        # (n_freqs,)
-    dft_Ez_real_out = np.zeros((n_freqs, n_monitors), dtype=np.float64)
-    dft_Ez_imag_out = np.zeros((n_freqs, n_monitors), dtype=np.float64)
-    dft_Ez_real_src = np.zeros(n_freqs, dtype=np.float64)
-    dft_Ez_imag_src = np.zeros(n_freqs, dtype=np.float64)
+    # DFT / monitor parameters
+    omega_j   = jnp.array(2.0 * math.pi * target_freqs_hz, dtype=jnp.float32)
+    mon_y_idx = jnp.array([m["grid_y"] for m in output_monitors], dtype=jnp.int32)
+    out_x     = nx - PML_CELLS - 5
+    src_y_mon = int(y_c / DY)
 
-    # Monitor positions: measure near end of domain, past output waveguides
-    monitor_y_cells = [m["grid_y"] for m in output_monitors]
-    out_x_cell = nx - PML_CELLS - 5   # last valid cell before right PML
+    # ---- Single step function (JIT-compiled via lax.scan) ----
+    def step_fn(carry, t_idx):
+        Ez, Hx, Hy, psi_Hx_y, psi_Hy_x, psi_Ez_x, psi_Ez_y, \
+            dft_ro, dft_io, dft_rs, dft_is = carry
 
-    t_start = time.time()
+        t = jnp.float32(t_idx) * DT_F
 
-    for step in range(n_steps):
-        t = step * DT
+        # --- H update ---
+        dEz_dy = (Ez[:, 1:] - Ez[:, :-1]) * inv_DY          # (nx, ny-1)
+        new_psi_Hx_y = psi_Hx_y.at[:, :-1].set(
+            bhy_j[:, :-1] * psi_Hx_y[:, :-1] + chy_j[:, :-1] * dEz_dy)
+        Hx = Hx.at[:, :-1].add(
+            -dt_mu * (dEz_dy / khy_j[:, :-1] + new_psi_Hx_y[:, :-1]))
 
-        # === Update H fields ===
-        # Hx: dEz/dy  — derivative already includes /DY
-        dEz_dy = (Ez[:, 1:] - Ez[:, :-1]) / DY    # shape (nx, ny-1)
-        psi_Hx_y[:, :-1] = bhy2[:, :-1] * psi_Hx_y[:, :-1] + chy2[:, :-1] * dEz_dy
-        Hx[:, :-1] -= dt_mu * (dEz_dy / khy2[:, :-1] + psi_Hx_y[:, :-1])
+        dEz_dx = (Ez[1:, :] - Ez[:-1, :]) * inv_DX          # (nx-1, ny)
+        new_psi_Hy_x = psi_Hy_x.at[:-1, :].set(
+            bhx_j[:-1] * psi_Hy_x[:-1, :] + chx_j[:-1] * dEz_dx)
+        Hy = Hy.at[:-1, :].add(
+            dt_mu * (dEz_dx / khx_j[:-1] + new_psi_Hy_x[:-1, :]))
 
-        # Hy: dEz/dx  — derivative already includes /DX
-        dEz_dx = (Ez[1:, :] - Ez[:-1, :]) / DX    # shape (nx-1, ny)
-        psi_Hy_x[:-1, :] = bhx2[:-1] * psi_Hy_x[:-1, :] + chx2[:-1] * dEz_dx
-        Hy[:-1, :] += dt_mu * (dEz_dx / khx2[:-1] + psi_Hy_x[:-1, :])
+        # --- E update ---
+        dHy_dx = (Hy[1:, :] - Hy[:-1, :]) * inv_DX          # (nx-1, ny)
+        dHx_dy = (Hx[:, 1:] - Hx[:, :-1]) * inv_DY          # (nx, ny-1)
 
-        # === Update E field ===
-        dHy_dx = (Hy[1:, :] - Hy[:-1, :]) / DX    # shape (nx-1, ny)
-        dHx_dy = (Hx[:, 1:] - Hx[:, :-1]) / DY    # shape (nx, ny-1)
+        new_psi_Ez_x = psi_Ez_x.at[1:, :].set(
+            bex_j[1:] * psi_Ez_x[1:, :] + cex_j[1:] * dHy_dx)
+        new_psi_Ez_y = psi_Ez_y.at[:, 1:].set(
+            bey_j[:, 1:] * psi_Ez_y[:, 1:] + cey_j[:, 1:] * dHx_dy)
 
-        psi_Ez_x[1:, :] = bex2[1:] * psi_Ez_x[1:, :] + cex2[1:] * dHy_dx
-        psi_Ez_y[:, 1:] = bey2[:, 1:] * psi_Ez_y[:, 1:] + cey2[:, 1:] * dHx_dy
+        Ez = Ez.at[1:, 1:].add(coeff_E[1:, 1:] * (
+            dHy_dx[:, 1:] / kex_j[1:] + new_psi_Ez_x[1:, 1:]
+          - dHx_dy[1:, :] / key_j[:, 1:] - new_psi_Ez_y[1:, 1:]
+        ))
 
-        Ez[1:, 1:] += dt_eps[1:, 1:] * EPS0 * (
-            dHy_dx[:, 1:] / kex2[1:] + psi_Ez_x[1:, 1:]
-          - dHx_dy[1:, :] / key2[:, 1:] - psi_Ez_y[1:, 1:]
-        )
+        # --- Soft source ---
+        src_amp = (jnp.exp(-((t - t0_f) / tau_f) ** 2)
+                   * jnp.sin(twopi * fc_f * t))
+        Ez = Ez.at[source_x_cell, src_y_lo:src_y_hi].add(
+            src_amp * src_prof_slice)
 
-        # === Soft source injection ===
-        # Add directly to Ez — no dt/eps scaling, just amplitude 1 V/m
-        src_amp = (
-            np.exp(-((t - SOURCE_T0) / SOURCE_TAU) ** 2)
-            * np.sin(2.0 * np.pi * SOURCE_F_CENTER * t)
-        )
-        Ez[source_x_cell, src_y_lo:src_y_hi] += src_amp * src_profile[src_y_lo:src_y_hi]
+        # --- DFT accumulation ---
+        phase  = omega_j * t                        # (n_freqs,)
+        cos_p  = jnp.cos(phase)
+        sin_p  = jnp.sin(phase)
+        Ez_out = Ez[out_x, mon_y_idx]               # (n_monitors,)
+        Ez_s   = Ez[source_x_cell, src_y_mon]       # scalar
 
-        # === Accumulate DFT ===
-        phase = omega * t
-        cos_p = np.cos(phase)    # (n_freqs,)
-        sin_p = np.sin(phase)
+        dft_ro = dft_ro + jnp.outer(cos_p, Ez_out)
+        dft_io = dft_io + jnp.outer(sin_p, Ez_out)
+        dft_rs = dft_rs + cos_p * Ez_s
+        dft_is = dft_is + sin_p * Ez_s
 
-        # Source monitor: Ez at source x-cell, center of input waveguide
-        src_y_mon = int(y_c / DY)
-        Ez_src = float(Ez[source_x_cell, src_y_mon])
-        dft_Ez_real_src += Ez_src * cos_p
-        dft_Ez_imag_src += Ez_src * sin_p
+        return (Ez, Hx, Hy, new_psi_Hx_y, new_psi_Hy_x, new_psi_Ez_x, new_psi_Ez_y,
+                dft_ro, dft_io, dft_rs, dft_is), None
 
-        # Output monitors
-        for m_idx, my in enumerate(monitor_y_cells):
-            Ez_mon = float(Ez[out_x_cell, my])
-            dft_Ez_real_out[:, m_idx] += Ez_mon * cos_p
-            dft_Ez_imag_out[:, m_idx] += Ez_mon * sin_p
+    # ---- Initial state ----
+    zeros2 = lambda: jnp.zeros((nx, ny), dtype=jnp.float32)
+    carry = (
+        zeros2(), zeros2(), zeros2(),          # Ez, Hx, Hy
+        zeros2(), zeros2(), zeros2(), zeros2(),  # psi ×4
+        jnp.zeros((n_freqs, n_monitors), dtype=jnp.float32),  # dft_ro
+        jnp.zeros((n_freqs, n_monitors), dtype=jnp.float32),  # dft_io
+        jnp.zeros(n_freqs, dtype=jnp.float32),                # dft_rs
+        jnp.zeros(n_freqs, dtype=jnp.float32),                # dft_is
+    )
 
-        if step % print_every == 0:
-            elapsed = time.time() - t_start
-            frac    = (step + 1) / n_steps
-            eta     = elapsed / frac - elapsed if frac > 0 else 0
-            print(f"    step {step:6d}/{n_steps}  |  {frac*100:.1f}%  |  "
-                  f"elapsed: {elapsed:.1f}s  |  ETA: {eta:.1f}s  |  "
-                  f"|Ez|_max: {np.abs(Ez).max():.3e}")
+    # ---- Run in chunks for progress reporting ----
+    n_chunks  = math.ceil(n_steps / chunk_size)
+    t_start   = time.time()
+    compiled  = False
 
-    # ----- DFT power -----
-    P_out = dft_Ez_real_out**2 + dft_Ez_imag_out**2   # (n_freqs, n_monitors)
-    P_src = dft_Ez_real_src**2 + dft_Ez_imag_src**2   # (n_freqs,)
+    for chunk in range(n_chunks):
+        s0 = chunk * chunk_size
+        s1 = min(s0 + chunk_size, n_steps)
+        t_indices = jnp.arange(s0, s1, dtype=jnp.int32)
+
+        carry, _ = jax.lax.scan(step_fn, carry, t_indices)
+        jax.block_until_ready(carry[0])   # sync GPU before timing
+
+        if not compiled:
+            compiled = True
+            print(f"  [JIT compiled in {time.time()-t_start:.1f}s]")
+
+        elapsed = time.time() - t_start
+        frac    = s1 / n_steps
+        eta     = elapsed / frac - elapsed
+        Ez_max  = float(jnp.abs(carry[0]).max())
+        print(f"    step {s1:6d}/{n_steps}  |  {frac*100:.0f}%  |  "
+              f"elapsed: {elapsed:.1f}s  |  ETA: {eta:.1f}s  |  "
+              f"|Ez|_max: {Ez_max:.3e}")
+
+    # ---- Extract DFT results ----
+    *_, dft_ro, dft_io, dft_rs, dft_is = carry
+    P_out = np.array(dft_ro**2 + dft_io**2)   # (n_freqs, n_monitors)
+    P_src = np.array(dft_rs**2 + dft_is**2)   # (n_freqs,)
 
     print(f"  Done in {time.time()-t_start:.1f}s")
     return P_out, P_src
+
+
+# Keep old name as alias so validate_* functions still work
+run_fdtd_broadband = run_fdtd_jax
 
 
 # ============================================================================
