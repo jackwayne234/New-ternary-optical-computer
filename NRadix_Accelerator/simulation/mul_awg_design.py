@@ -112,7 +112,7 @@ print(f"  FSR/span ratio:    {fsr_hz/freq_span:.2f}x  [need >1.2] PASS")
 
 # Spatial dispersion: position at output FPR for frequency f_j
 #   y_j = -R_FPR * m * lam_c^2 / (N_EFF_SLAB * D_ARM * c) * (f_j - f_c)
-dispersion_per_hz = -R_FPR * M_ORDER * LAM_C**2 / (N_EFF_SLAB * D_ARM * C_LIGHT)
+dispersion_per_hz = R_FPR * M_ORDER * LAM_C**2 / (N_EFF_SLAB * D_ARM * C_LIGHT)
 y_out = dispersion_per_hz * (FREQS - F_C)  # position of each output port, m
 
 print(f"\n  Output port positions (relative to center):")
