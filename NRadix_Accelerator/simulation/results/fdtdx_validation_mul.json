@@ -1,0 +1,52 @@
+{
+  "component": "multiply_unit",
+  "n_pass": 1,
+  "n_total": 3,
+  "pass_rate": 0.3333333333333333,
+  "n_steps": 40000,
+  "grid": "250x375",
+  "results": [
+    {
+      "logical_value": -1,
+      "expected_port": 0,
+      "detected_port": 1,
+      "freq_thz": 198.0,
+      "extinction_ratio_db": -6.2432200457820315,
+      "power_fraction": 0.191924334950885,
+      "port_powers_normalized": [
+        0.07052002847194672,
+        0.27666810154914856,
+        0.02024851366877556
+      ],
+      "passed": false
+    },
+    {
+      "logical_value": 0,
+      "expected_port": 1,
+      "detected_port": 1,
+      "freq_thz": 201.0,
+      "extinction_ratio_db": 7.262836998607129,
+      "power_fraction": 0.841886223268544,
+      "port_powers_normalized": [
+        0.003089915495365858,
+        0.06951893121004105,
+        0.00996636413037777
+      ],
+      "passed": true
+    },
+    {
+      "logical_value": 1,
+      "expected_port": 2,
+      "detected_port": 1,
+      "freq_thz": 208.0,
+      "extinction_ratio_db": -2.6842172495246537,
+      "power_fraction": 0.350221931015267,
+      "port_powers_normalized": [
+        0.0032594241201877594,
+        0.2259543389081955,
+        0.12354324012994766
+      ],
+      "passed": false
+    }
+  ]
+}
