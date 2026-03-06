@@ -75,7 +75,7 @@ LAM_C   = C_LIGHT / F_C                                          # center wavele
 # =============================================================================
 
 M_ORDER = 5       # grating order (low → large FSR)
-N_ARMS  = 10      # number of array waveguides
+N_ARMS  = 25      # number of array waveguides (need ≥20 to resolve 3 THz gap at FSR=38.5 THz)
 R_FPR   = 120e-6  # FPR radius, m  (120 µm)
 D_ARM   = 2e-6    # arm pitch at FPR interface, m
 R_BEND  = 10e-6   # minimum bend radius for arms, m
