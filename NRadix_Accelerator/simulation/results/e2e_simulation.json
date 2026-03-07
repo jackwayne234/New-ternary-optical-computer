@@ -1,0 +1,218 @@
+{
+  "component": "e2e_trit_multiply",
+  "description": "End-to-end NRadix trit\u00d7trit multiply: SFG + AWG demux",
+  "n_pass": 9,
+  "n_total": 9,
+  "pass_rate": 1.0,
+  "sfg_material": "TFLN z-cut, d_eff=17.2 pm/V, A_eff=0.6 \u00b5m\u00b2, L=10mm",
+  "sfg_pump_power_mw": 1.0,
+  "awg_params": {
+    "n_channels": 6,
+    "m_order": 10,
+    "n_arms": 22,
+    "r_fpr_um": 200.0,
+    "fsr_thz": 36.11496296296296,
+    "freq_span_thz": 20.0,
+    "min_port_sep_um": 3.1345225205847576
+  },
+  "combinations": [
+    {
+      "trit_a": 1,
+      "trit_b": 1,
+      "product": 1,
+      "sfg_freq_thz": 382.0,
+      "sfg_conv_eff_pct": 0.018138080646057646,
+      "sfg_norm_eff": 18138080646.057644,
+      "ppln_period_um": 22.55274842046962,
+      "expected_port": 0,
+      "detected_port": 0,
+      "awg_er_db": 22.744530540254043,
+      "awg_power_frac": 0.9921164399251519,
+      "awg_port_powers_norm": [
+        0.9921164399251519,
+        0.005273629221872043,
+        0.001511138367162238,
+        0.0007608989209182781,
+        0.00027914867617107877,
+        5.87448887245705e-05
+      ],
+      "passed": true
+    },
+    {
+      "trit_a": 1,
+      "trit_b": 2,
+      "product": 2,
+      "sfg_freq_thz": 385.0,
+      "sfg_conv_eff_pct": 0.018413349574762147,
+      "sfg_norm_eff": 18413349574.762146,
+      "ppln_period_um": 22.115051200631363,
+      "expected_port": 1,
+      "detected_port": 1,
+      "awg_er_db": 21.863300218083488,
+      "awg_power_frac": 0.9862978323261901,
+      "awg_port_powers_norm": [
+        0.00642211468462168,
+        0.9862978323261901,
+        0.005889556759317878,
+        0.0002003564858960568,
+        0.0007639335152226344,
+        0.000426206228751596
+      ],
+      "passed": true
+    },
+    {
+      "trit_a": 1,
+      "trit_b": 3,
+      "product": 3,
+      "sfg_freq_thz": 392.0,
+      "sfg_conv_eff_pct": 0.01906304818492423,
+      "sfg_norm_eff": 19063048184.92423,
+      "ppln_period_um": 21.132341096125664,
+      "expected_port": 3,
+      "detected_port": 3,
+      "awg_er_db": 22.14454112817783,
+      "awg_power_frac": 0.9915904030758244,
+      "awg_port_powers_norm": [
+        0.0006840003608836208,
+        0.00013497231452458955,
+        0.0008645273963278113,
+        0.9915904030758244,
+        0.006051711306352545,
+        0.0006743855460871096
+      ],
+      "passed": true
+    },
+    {
+      "trit_a": 2,
+      "trit_b": 1,
+      "product": 2,
+      "sfg_freq_thz": 385.0,
+      "sfg_conv_eff_pct": 0.018413349574762147,
+      "sfg_norm_eff": 18413349574.762146,
+      "ppln_period_um": 22.115051200631363,
+      "expected_port": 1,
+      "detected_port": 1,
+      "awg_er_db": 21.863300218083488,
+      "awg_power_frac": 0.9862978323261901,
+      "awg_port_powers_norm": [
+        0.00642211468462168,
+        0.9862978323261901,
+        0.005889556759317878,
+        0.0002003564858960568,
+        0.0007639335152226344,
+        0.000426206228751596
+      ],
+      "passed": true
+    },
+    {
+      "trit_a": 2,
+      "trit_b": 2,
+      "product": 4,
+      "sfg_freq_thz": 388.0,
+      "sfg_conv_eff_pct": 0.018690475658778967,
+      "sfg_norm_eff": 18690475658.77897,
+      "ppln_period_um": 21.684137511396628,
+      "expected_port": 2,
+      "detected_port": 2,
+      "awg_er_db": 21.957335223954722,
+      "awg_power_frac": 0.9914153347838475,
+      "awg_port_powers_norm": [
+        0.0011467239054051511,
+        0.006317163388173052,
+        0.9914153347838475,
+        0.0007624366591177759,
+        0.00021968123482741077,
+        0.0001386600286291417
+      ],
+      "passed": true
+    },
+    {
+      "trit_a": 2,
+      "trit_b": 3,
+      "product": 6,
+      "sfg_freq_thz": 395.0,
+      "sfg_conv_eff_pct": 0.01934448567888883,
+      "sfg_norm_eff": 19344485678.88883,
+      "ppln_period_um": 20.71705384665661,
+      "expected_port": 4,
+      "detected_port": 4,
+      "awg_er_db": 22.020895502378547,
+      "awg_power_frac": 0.9925378880279424,
+      "awg_port_powers_norm": [
+        0.0004398990122610119,
+        0.0006493165365759696,
+        0.00012001280531112082,
+        0.006232431928613842,
+        0.9925378880279424,
+        2.0451689295577608e-05
+      ],
+      "passed": true
+    },
+    {
+      "trit_a": 3,
+      "trit_b": 1,
+      "product": 3,
+      "sfg_freq_thz": 392.0,
+      "sfg_conv_eff_pct": 0.01906304818492423,
+      "sfg_norm_eff": 19063048184.92423,
+      "ppln_period_um": 21.132341096125664,
+      "expected_port": 3,
+      "detected_port": 3,
+      "awg_er_db": 22.14454112817783,
+      "awg_power_frac": 0.9915904030758244,
+      "awg_port_powers_norm": [
+        0.0006840003608836208,
+        0.00013497231452458955,
+        0.0008645273963278113,
+        0.9915904030758244,
+        0.006051711306352545,
+        0.0006743855460871096
+      ],
+      "passed": true
+    },
+    {
+      "trit_a": 3,
+      "trit_b": 2,
+      "product": 6,
+      "sfg_freq_thz": 395.0,
+      "sfg_conv_eff_pct": 0.01934448567888883,
+      "sfg_norm_eff": 19344485678.88883,
+      "ppln_period_um": 20.71705384665661,
+      "expected_port": 4,
+      "detected_port": 4,
+      "awg_er_db": 22.020895502378547,
+      "awg_power_frac": 0.9925378880279424,
+      "awg_port_powers_norm": [
+        0.0004398990122610119,
+        0.0006493165365759696,
+        0.00012001280531112082,
+        0.006232431928613842,
+        0.9925378880279424,
+        2.0451689295577608e-05
+      ],
+      "passed": true
+    },
+    {
+      "trit_a": 3,
+      "trit_b": 3,
+      "product": 9,
+      "sfg_freq_thz": 402.0,
+      "sfg_conv_eff_pct": 0.020008503810958575,
+      "sfg_norm_eff": 20008503810.958576,
+      "ppln_period_um": 19.78587436824144,
+      "expected_port": 5,
+      "detected_port": 5,
+      "awg_er_db": 30.87090933624352,
+      "awg_power_frac": 0.9978975610839605,
+      "awg_port_powers_norm": [
+        0.0004114719128815752,
+        0.00035709998026017624,
+        4.0572704551890805e-05,
+        0.0008165730219863145,
+        0.00047672129635945563,
+        0.9978975610839605
+      ],
+      "passed": true
+    }
+  ]
+}
